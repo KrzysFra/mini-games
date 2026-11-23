@@ -79,7 +79,7 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
   }
 
   /** Start the selected mini-game once every player in the room is ready. */
-  private startIfAllReady() {
+  protected startIfAllReady() {
     if (this.state.phase !== "selection" || this.state.players.size === 0) { return }
     for (const player of this.state.players.values()) {
       if (!player.ready) { return }
@@ -91,13 +91,22 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
    * Back to game selection once every player has escaped the running game. Everyone's
    * per-game state resets, so the next game starts fresh and needs a new round of ready.
    */
-  private endIfAllEscaped() {
+  protected endIfAllEscaped() {
     if (this.state.phase !== "playing" || this.state.players.size === 0) { return }
     for (const player of this.state.players.values()) {
       if (!player.escaped) { return }
     }
+    this.endGame()
+  }
 
+  /** The running mini-game is over: back to game selection. */
+  protected endGame() {
     this.state.phase = "selection"
+    this.resetPlayers()
+  }
+
+  /** Clear everyone's per-game state, so the next game starts fresh and needs a new round of ready. */
+  protected resetPlayers() {
     for (const player of this.state.players.values()) {
       player.ready = false
       player.escaped = false

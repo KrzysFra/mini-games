@@ -5,7 +5,9 @@ import { isValidPlayerName, sanitizePlayerName } from '../../../shared/player-na
 import { client } from '../../core/network'
 import { loadPlayerName, savePlayerName } from '../../core/player-name'
 import { hasResumableSession, leaveCurrentRoom, resumeSession, setCurrentRoom } from '../../core/session'
+import { SANDBOX_GAME, SANDBOX_ROOM } from '../../core/sandbox'
 import { createButton, setButtonEnabled, textStyle, titleStyle } from '../../core/ui'
+import { loadMiniGameScene } from '../../games/registry'
 import { GameSelectionRoom } from './GameSelectionRoom'
 
 /** What the Lobby shows per room. */
@@ -181,8 +183,13 @@ export class Lobby extends Scene {
     this.connect()
   }
 
-  /** Join the server's lobby room; the room list arrives as its messages. */
+  /** Join the server's lobby room; the room list arrives as its messages. In sandbox mode, join the sandbox instead. */
   private async connect() {
+    if (SANDBOX_GAME) {
+      this.joinSandbox(SANDBOX_GAME)
+      return
+    }
+
     this.setStatus('connecting')
 
     let room: Room
@@ -213,6 +220,34 @@ export class Lobby extends Scene {
     })
 
     this.setStatus('connected')
+  }
+
+  /** Sandbox mode: join the shared sandbox room and go straight into its mini-game. */
+  private async joinSandbox(game: string) {
+    this.setStatus('connecting')
+    this.errorText.setText('')
+
+    let room: Room
+    let key: string
+    try {
+      room = await client.joinOrCreate(SANDBOX_ROOM, { game, name: this.playerName })
+      if (this.disposed) {
+        room.leave().catch(() => {})
+        return
+      }
+      setCurrentRoom(room)
+      key = await loadMiniGameScene(this.scene, game)
+    } catch (e) {
+      console.warn('Joining the sandbox failed', e)
+      if (room) leaveCurrentRoom()
+      if (this.disposed) return
+      this.setStatus('failed')
+      this.errorText.setText(`Could not join the sandbox: ${e instanceof Error ? e.message : e}`)
+      return
+    }
+
+    if (this.disposed) leaveCurrentRoom()
+    else this.scene.start(key)
   }
 
   /** Leave the lobby room on purpose (entering a game room, or the scene going away). */
@@ -408,13 +443,21 @@ export class Lobby extends Scene {
     this.list.removeAll(true)
 
     if (this.rooms.size === 0) {
-      const message = {
-        resuming: 'Rejoining your room…',
-        connecting: 'Connecting…',
-        reconnecting: 'Connection lost, reconnecting…',
-        failed: 'Cannot reach the server',
-        connected: 'No active rooms',
-      }[this.status]
+      const message = SANDBOX_GAME
+        ? {
+          resuming: `Sandbox (${SANDBOX_GAME}): rejoining…`,
+          connecting: `Sandbox (${SANDBOX_GAME}): joining…`,
+          reconnecting: `Sandbox (${SANDBOX_GAME}): reconnecting…`,
+          failed: `Sandbox (${SANDBOX_GAME}): could not join`,
+          connected: `Sandbox (${SANDBOX_GAME})`,
+        }[this.status]
+        : {
+          resuming: 'Rejoining your room…',
+          connecting: 'Connecting…',
+          reconnecting: 'Connection lost, reconnecting…',
+          failed: 'Cannot reach the server',
+          connected: 'No active rooms',
+        }[this.status]
       this.list.add(
         this.add.text(PANEL_WIDTH / 2, ROW_HEIGHT, message, textStyle(32, '#9fb3bb')).setOrigin(0.5),
       )

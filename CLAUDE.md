@@ -24,6 +24,7 @@ src/client/            Phaser client — main.ts (entry, game switcher), core/ (
 src/client/core/network.ts   the single shared Colyseus Client (same-origin endpoint)
 src/client/core/player-name.ts   player name persisted in localStorage (load/save, failure-safe)
 src/client/core/ui.ts   shared menu widgets: createButton / setButtonEnabled / setButtonLabel, textStyle, titleStyle
+src/client/core/sandbox.ts   `SANDBOX_GAME` from `VITE_SANDBOX` (dev only), see Sandbox mode in Notes
 src/client/core/session.ts   the game room the player is in (`currentRoom`), outlives scenes; keeps its
                              reconnection token in sessionStorage so the Lobby resumes it after a reload
 src/client/sandbox/    experiments & prototypes (examples/, pill-move/) — not real games
@@ -34,6 +35,8 @@ src/client/games/      mini-game scenes: registry.ts (`MINI_GAMES` id → scene 
                        MiniGameScene.ts (base: room handlers, back to selection/lobby),
                        placeholder/PlaceholderGame.ts (one dot per player, any key → random color)
 src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
+src/server/rooms/GameSelectionRoom.ts   the game room (type `my_room`): selection → playing
+src/server/rooms/SandboxRoom.ts   dev-only `sandbox` room (extends GameSelectionRoom)
 src/shared/            code used by BOTH sides: constants, player-name sanitizing, games.ts (`MINI_GAMES`
                        list, placeholders for now), pure simulation logic
 public/                static assets (served at /, e.g. 'assets/block.png')
@@ -77,11 +80,10 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `useDefineForClassFields: false` (required by Colyseus schema).
 
 ## Notes
-- The server room (`MyRoom`, `my_room`) and `/api/hello`, `/hi` routes are still from the
-  `create-colyseus-app` template.
+- The `/api/hello`, `/hi` routes are still from the `create-colyseus-app` template.
 - Connection flow: the Lobby joins `lobby` (with `{ name }`) on startup; the server forces the listing
   filter to `my_room`. Create/Join call `client.create('my_room')` / `joinById` with `{ name }`, then
-  the Lobby leaves `lobby` and starts `GameSelectionRoom`. `MyRoom` rejects joins without a valid name
+  the Lobby leaves `lobby` and starts `GameSelectionRoom`. `GameSelectionRoom` (server) rejects joins without a valid name
   and puts a display `title` ("<name>'s room") in its metadata — the listing's `name` is the room type.
 - Game selection room messages: `setReady` (boolean) and `selectGame` (a `MINI_GAMES` id; any player may
   switch, and switching resets everyone's `ready`). Both only apply while `phase` is `"selection"`.
@@ -92,6 +94,14 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `Player.color`; dots start at `DEFAULT_DOT_COLOR` (red). `escape` (Escape key) — sets `Player.escaped`
   ("ESC" in the dot); once every player has escaped (checked on `escape` and on leave) the phase returns
   to `"selection"` and everyone's `ready`/`escaped`/`color` reset.
+- **Sandbox mode** (for developing a mini-game): put `VITE_SANDBOX=<MINI_GAMES id>` (or `true` for the
+  default game) in `.env.local` (git-ignored) and restart `npm run dev`. Every client then skips the lobby:
+  the Lobby scene `joinOrCreate`s the `sandbox` room (`filterBy(["game"])`, so all clients share one room)
+  and starts the game scene directly. `SandboxRoom` starts in `"playing"` and stays there (all escaped →
+  players reset, no return to selection). Max `MAX_PLAYERS_PER_ROOM` players; more are rejected with
+  "Sandbox is full" (enforced in `onJoin`; `maxClients` is unlimited so joinOrCreate never opens a second
+  room). Players without a valid name become "Player N". The room is only registered when
+  `NODE_ENV !== "production"`, and the client ignores `VITE_SANDBOX` outside `import.meta.env.DEV`.
 - Player names: `sanitizePlayerName` / `isValidPlayerName` in `src/shared/player-name.ts`
   (`NAME_MIN_LENGTH` / `NAME_MAX_LENGTH` in `shared/constants.ts`); the server re-sanitizes everything.
 - Scenes must clean up on `destroy` as well as `shutdown`: Ctrl+←/→ destroys the whole game, which

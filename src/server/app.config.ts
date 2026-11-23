@@ -12,6 +12,7 @@ import {
  */
 import { GameSelectionRoom } from "./rooms/GameSelectionRoom.js";
 import { MainLobbyRoom } from "./rooms/MainLobbyRoom.js";
+import { SandboxRoom } from "./rooms/SandboxRoom.js";
 
 const server = defineServer({
 
@@ -21,6 +22,10 @@ const server = defineServer({
   rooms: {
     my_room: defineRoom(GameSelectionRoom).enableRealtimeListing(),
     lobby: defineRoom(MainLobbyRoom),
+    // Dev-only: clients with VITE_SANDBOX set join this room straight into a mini-game
+    ...(process.env.NODE_ENV !== "production"
+      ? { sandbox: defineRoom(SandboxRoom).filterBy(["game"]) }
+      : {}),
   },
 
   /**
