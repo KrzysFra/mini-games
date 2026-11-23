@@ -1,8 +1,7 @@
-import { GameObjects, Scene } from 'phaser'
-import type { Room } from '@colyseus/sdk'
-import { DEFAULT_DOT_COLOR, MAX_PLAYERS_PER_ROOM } from '../../../../shared/constants'
-import { currentRoom, leaveCurrentRoom } from '../../../core/session'
-import { textStyle, titleStyle } from '../../../core/ui'
+import { GameObjects } from 'phaser'
+import { DEFAULT_DOT_COLOR, MAX_PLAYERS_PER_ROOM } from '../../../shared/constants'
+import { textStyle, titleStyle } from '../../core/ui'
+import { MiniGameScene } from '../MiniGameScene'
 
 /** The fields of the server's room state this scene reads. */
 interface PlayerView {
@@ -33,36 +32,19 @@ const SLOTS_CENTER_Y = 580
 const COLOR_OWN_SLOT = 0xe0c068
 
 /**
- * Placeholder mini-game: one dot per player, red at first. Pressing any key gives
+ * Placeholder mini-game (no physics): one dot per player, red at first. Pressing any key gives
  * your dot a random color (picked by the server), and everyone sees it. Escape marks
  * you as done ("ESC" in your dot); once everyone has, the room returns to game selection.
  */
-export class PlaceholderGame extends Scene {
-  room: Room
+export class PlaceholderGame extends MiniGameScene<RoomStateView> {
   slots: Slot[] = []
   statusText: GameObjects.Text
-  /** The connection dropped and the SDK is trying to get it back; messages would be lost. */
-  dropped = false
-  /** Detaches this scene from the room events (the room outlives the scene). */
-  removeRoomHandlers: () => void
 
   constructor() {
     super('PlaceholderGame')
   }
 
-  get state(): RoomStateView | undefined {
-    return this.room.state as RoomStateView | undefined
-  }
-
-  create() {
-    // Nothing to show without a room (e.g. it closed while switching scenes)
-    if (!currentRoom) {
-      this.scene.start('Lobby')
-      return
-    }
-
-    this.room = currentRoom
-    this.dropped = false
+  protected createGame() {
     this.slots = []
 
     const centerX = this.scale.width / 2
@@ -77,32 +59,6 @@ export class PlaceholderGame extends Scene {
       if (e.repeat || this.dropped) return
       this.room.send(e.code === 'Escape' ? 'escape' : 'changeColor')
     })
-
-    // Room events; the room outlives this scene, so the handlers are removed again on the way out
-    const onStateChange = () => this.render()
-    const onDrop = () => this.setDropped(true)
-    const onReconnect = () => this.setDropped(false)
-    // Kicked, room disposed, or the seat expired while dropped
-    const onLeave = () => this.scene.start('Lobby')
-    this.room.onStateChange(onStateChange)
-    this.room.onDrop(onDrop)
-    this.room.onReconnect(onReconnect)
-    this.room.onLeave(onLeave)
-
-    this.removeRoomHandlers = () => {
-      this.room.onStateChange.remove(onStateChange)
-      this.room.onDrop.remove(onDrop)
-      this.room.onReconnect.remove(onReconnect)
-      this.room.onLeave.remove(onLeave)
-    }
-    this.events.once('shutdown', this.removeRoomHandlers)
-    // Switching games (Ctrl+←/→) destroys the scene without a shutdown
-    this.events.once('destroy', () => {
-      this.removeRoomHandlers()
-      leaveCurrentRoom()
-    })
-
-    this.render()
   }
 
   /** `MAX_PLAYERS_PER_ROOM` dots in a centered grid, filled row by row in join order. */
@@ -125,17 +81,7 @@ export class PlaceholderGame extends Scene {
     }
   }
 
-  /** Bring everything in line with the room state (called on every state patch). */
-  private render() {
-    const state = this.state
-    if (!state) return
-
-    // The game ended: back to picking the next one
-    if (state.phase !== 'playing') {
-      this.scene.start('GameSelectionRoom')
-      return
-    }
-
+  protected renderState(state: RoomStateView) {
     const players = [...state.players.entries()]
     this.slots.forEach((slot, i) => {
       const [sessionId, player] = players[i] ?? []
@@ -151,8 +97,7 @@ export class PlaceholderGame extends Scene {
     })
   }
 
-  private setDropped(dropped: boolean) {
-    this.dropped = dropped
+  protected onDroppedChanged(dropped: boolean) {
     this.statusText.setText(dropped ? 'Connection lost, reconnecting…' : '')
   }
 }

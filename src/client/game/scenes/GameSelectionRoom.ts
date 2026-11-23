@@ -4,6 +4,7 @@ import { MAX_PLAYERS_PER_ROOM } from '../../../shared/constants'
 import { MINI_GAMES, miniGameIndex } from '../../../shared/games'
 import { currentRoom, leaveCurrentRoom } from '../../core/session'
 import { createButton, setButtonEnabled, setButtonLabel, textStyle, titleStyle } from '../../core/ui'
+import { loadMiniGameScene } from '../../games/registry'
 
 /** The fields of the server's room state this scene reads. */
 interface PlayerView {
@@ -66,6 +67,8 @@ export class GameSelectionRoom extends Scene {
   slots: Slot[] = []
   /** The connection dropped and the SDK is trying to get it back; messages would be lost. */
   dropped = false
+  /** The selected mini-game's scene is being loaded; it starts once it is ready. */
+  startingGame = false
   /** Detaches this scene from the room events (the room outlives the scene). */
   removeRoomHandlers: () => void
 
@@ -91,6 +94,7 @@ export class GameSelectionRoom extends Scene {
 
     this.room = currentRoom
     this.dropped = false
+    this.startingGame = false
     this.slots = []
 
     const { width } = this.scale
@@ -184,9 +188,9 @@ export class GameSelectionRoom extends Scene {
     const state = this.state
     if (!state) return
 
-    // Everyone is ready: the selected mini-game runs (every game is the placeholder for now)
+    // Everyone is ready: the selected mini-game runs
     if (state.phase === 'playing') {
-      this.scene.start('PlaceholderGame')
+      this.startMiniGame(state.selectedMiniGame)
       return
     }
 
@@ -210,6 +214,30 @@ export class GameSelectionRoom extends Scene {
     })
 
     this.refreshButtons()
+  }
+
+  /** Load the mini-game's scene (lazily, the first time) and switch to it. */
+  private async startMiniGame(id: string) {
+    if (this.startingGame) return
+    this.startingGame = true
+
+    let key: string
+    try {
+      key = await loadMiniGameScene(this.scene, id)
+    } catch (e) {
+      console.warn('Loading the mini-game failed', e)
+      if (!this.sys.isActive()) return
+      this.startingGame = false
+      this.statusText.setText('Could not load the game')
+      return
+    }
+
+    // Left the room, or the game ended, while it was loading
+    if (!this.sys.isActive() || this.state?.phase !== 'playing') {
+      this.startingGame = false
+      return
+    }
+    this.scene.start(key)
   }
 
   private refreshButtons() {

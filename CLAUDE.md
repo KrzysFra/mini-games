@@ -29,9 +29,10 @@ src/client/core/session.ts   the game room the player is in (`currentRoom`), out
 src/client/sandbox/    experiments & prototypes (examples/, pill-move/) — not real games
 src/client/game/scenes Lobby.ts (startup scene: connects to the `lobby` room, name input, live room list,
                        create/join), GameSelectionRoom.ts (after entering a room: leave/ready buttons, mini-game picker,
-                       8 player slots with ready state — all rendered from the room state),
-                       placeholder-game/PlaceholderGame.ts (one dot per player, any key → random color);
-                       Boot/Preloader/MainMenu/Game/GameOver are unused Phaser template scenes
+                       8 player slots with ready state — all rendered from the room state)
+src/client/games/      mini-game scenes: registry.ts (`MINI_GAMES` id → scene key + lazy `import()`),
+                       MiniGameScene.ts (base: room handlers, back to selection/lobby),
+                       placeholder/PlaceholderGame.ts (one dot per player, any key → random color)
 src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
 src/shared/            code used by BOTH sides: constants, player-name sanitizing, games.ts (`MINI_GAMES`
                        list, placeholders for now), pure simulation logic
@@ -51,6 +52,12 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   partial, at minimum `{ scene }`) and is registered in the `games` array in `src/client/main.ts`.
   `main.ts` provides the common config (1920×1080, `Scale.FIT`, `parent: 'game-container'`).
   Ctrl+←/→ cycles games (ignored while an `<input>` has focus). The first entry is the startup scene.
+- **Mini-games**: one persistent Phaser `Game` runs Lobby → GameSelectionRoom → mini-game; don't create a
+  new `Game` per mini-game (destroying it leaves the room). A mini-game extends `MiniGameScene`
+  (`createGame` / `renderState`, optional `onDroppedChanged` / `disposeGame`) and is listed in
+  `src/client/games/registry.ts`; GameSelectionRoom loads and `scene.add`s it when `phase` becomes `"playing"`.
+  Physics is per scene: `super({ key, physics: { default: 'arcade' | 'matter', ... } })`, none if omitted;
+  external engines are created in `createGame`, stepped in `update`, freed in `disposeGame`.
 - **HTML inputs in scenes**: append the element to `this.game.domContainer` with absolute positioning in
   game coordinates (the container is game-sized and CSS-scaled with the canvas), set
   `pointer-events: auto`, remove it on scene `shutdown` and `destroy`, and add `dom: { createContainer: true }` to the
@@ -79,8 +86,8 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
 - Game selection room messages: `setReady` (boolean) and `selectGame` (a `MINI_GAMES` id; any player may
   switch, and switching resets everyone's `ready`). Both only apply while `phase` is `"selection"`.
 - Room `phase`: `"selection"` → `"playing"` once every player is ready (checked on `setReady` and on leave).
-  Clients follow it: GameSelectionRoom starts `PlaceholderGame` (every `MINI_GAMES` entry maps to it
-  for now), which goes back if the phase returns to `"selection"`.
+  Clients follow it: GameSelectionRoom starts the selected game's scene via the registry (every
+  `MINI_GAMES` entry maps to `PlaceholderGame` for now), which goes back if the phase returns to `"selection"`.
 - Placeholder game messages (no payload, `"playing"` only): `changeColor` — the server picks a random
   `Player.color`; dots start at `DEFAULT_DOT_COLOR` (red). `escape` (Escape key) — sets `Player.escaped`
   ("ESC" in the dot); once every player has escaped (checked on `escape` and on leave) the phase returns
