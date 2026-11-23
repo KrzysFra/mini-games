@@ -9,3 +9,7 @@ export const PLAYER_HALF = 12;
 
 /** Units per second at full stick. */
 export const PLAYER_SPEED = 260;
+
+/** Player names: shorter names can't create or join rooms; longer ones are cut. */
+export const NAME_MIN_LENGTH = 4;
+export const NAME_MAX_LENGTH = 20;

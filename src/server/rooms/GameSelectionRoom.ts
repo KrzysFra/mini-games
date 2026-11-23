@@ -1,9 +1,10 @@
 import { Room, Client, CloseCode, type StepContext } from "colyseus";
 import { MyRoomState, Player, MoveInput } from "./schema/MiniGameRoomState.js";
 import { stepEntity } from "../../shared/movement.js";
+import { isValidPlayerName, sanitizePlayerName } from "../../shared/player-name.js";
 import { TICK_RATE, ARENA_WIDTH, ARENA_HEIGHT } from "../../shared/constants.js";
 
-export class MyRoom extends Room<{ state: MyRoomState, input: MoveInput }> {
+export class GameSelectionRoom extends Room<{ state: MyRoomState, input: MoveInput }> {
   maxClients = 8;
   state = new MyRoomState();
 
@@ -26,10 +27,26 @@ export class MyRoom extends Room<{ state: MyRoomState, input: MoveInput }> {
 
   onCreate(options: any) {
     this.setFixedTimestep((ctx) => this.step(ctx), TICK_RATE);
+    // The lobby lists rooms by type ("my_room"); the title is what players see.
+    this.setMetadata({ title: `${sanitizePlayerName(options?.name) || "Unnamed"}'s room` });
   }
 
   onJoin(client: Client, options: any) {
-    console.log(client.sessionId, "joined!");
+    const name = sanitizePlayerName(options?.name);
+    if (!isValidPlayerName(name)) {
+      throw new Error("A player name is required to join.");
+    }
+
+    // Deterministic spawn ring, so two players never start on top of each other.
+    const angle = this.joinCount++ * 2.399963;
+    this.state.players.set(client.sessionId, new Player({
+      name,
+      x: ARENA_WIDTH / 2 + Math.cos(angle) * 80,
+      y: ARENA_HEIGHT / 2 + Math.sin(angle) * 80,
+      vx: 0,
+      vy: 0,
+    }));
+    console.log(client.sessionId, "joined as", name);
   }
 
   onLeave(client: Client, code: CloseCode) {

@@ -22,11 +22,16 @@ Browser-based multiplayer mini-games collection. Early development stage.
 src/server/            Colyseus server — app.config.ts (Vite serverEntry), rooms/, rooms/schema/
 src/client/            Phaser client — main.ts (entry, game switcher), core/ (shared client services)
 src/client/core/network.ts   the single shared Colyseus Client (same-origin endpoint)
+src/client/core/player-name.ts   player name persisted in localStorage (load/save, failure-safe)
+src/client/core/session.ts   the game room the player is in (`currentRoom`), outlives scenes
 src/client/sandbox/    experiments & prototypes (examples/, pill-move/) — not real games
-src/client/game/scenes Phaser template scenes (currently unused)
-src/shared/            code used by BOTH sides: constants + pure simulation logic
+src/client/game/scenes Lobby.ts (startup scene: connects to the `lobby` room, name input, live room list,
+                       create/join), GameSelectionRoom.ts (placeholder scene after entering a room);
+                       Boot/Preloader/MainMenu/Game/GameOver are unused Phaser template scenes
+src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
+src/shared/            code used by BOTH sides: constants, player-name sanitizing, pure simulation logic
 public/                static assets (served at /, e.g. 'assets/block.png')
-test/                  server tests
+test/                  server tests; all files share one booted server via `test/server.ts`
 ```
 Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`, `shared/games/<game>/`.
 
@@ -40,7 +45,12 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
 - **Client switching**: each client game/scene exports a `config<Name>` (`Types.Core.GameConfig`
   partial, at minimum `{ scene }`) and is registered in the `games` array in `src/client/main.ts`.
   `main.ts` provides the common config (1920×1080, `Scale.FIT`, `parent: 'game-container'`).
-  Ctrl+←/→ cycles games.
+  Ctrl+←/→ cycles games (ignored while an `<input>` has focus). The first entry is the startup scene.
+- **HTML inputs in scenes**: append the element to `this.game.domContainer` with absolute positioning in
+  game coordinates (the container is game-sized and CSS-scaled with the canvas), set
+  `pointer-events: auto`, remove it on scene `shutdown` and `destroy`, and add `dom: { createContainer: true }` to the
+  scene's config. Don't use Phaser `DOMElement` (`this.add.dom`) in scenes with extra cameras: it is
+  repositioned per camera, and any camera that `ignore`s it sets `display: none` on it.
 - **Server rooms**: registered in `src/server/app.config.ts` via `defineRoom`. State is defined with the
   `schema({...})` / `t.*` API plus `SchemaType<>` type exports (not decorators).
 - **Player input**: sent through `Room.defineInput()` with a `sanitize` clamp — never trust client values.
@@ -57,5 +67,13 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
 ## Notes
 - The server room (`MyRoom`, `my_room`) and `/api/hello`, `/hi` routes are still from the
   `create-colyseus-app` template.
-- The client does not connect to the server yet.
+- Connection flow: the Lobby joins `lobby` (with `{ name }`) on startup; the server forces the listing
+  filter to `my_room`. Create/Join call `client.create('my_room')` / `joinById` with `{ name }`, then
+  the Lobby leaves `lobby` and starts `GameSelectionRoom`. `MyRoom` rejects joins without a valid name
+  and puts a display `title` ("<name>'s room") in its metadata — the listing's `name` is the room type.
+- Player names: `sanitizePlayerName` / `isValidPlayerName` in `src/shared/player-name.ts`
+  (`NAME_MIN_LENGTH` / `NAME_MAX_LENGTH` in `shared/constants.ts`); the server re-sanitizes everything.
+- Scenes must clean up on `destroy` as well as `shutdown`: Ctrl+←/→ destroys the whole game, which
+  doesn't emit `shutdown`.
+- Don't `boot()` a second test server in one mocha run (matchmaking breaks); use `testServer()`.
 - `tsc --noEmit` currently reports implicit-any errors in `src/client/sandbox/pill-move/stick-man.ts`.

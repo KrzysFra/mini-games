@@ -1,20 +1,45 @@
-import { Cameras, GameObjects, Math as PMath, Scene, Types } from 'phaser'
+import { Cameras, GameObjects, Math as PMath, Scene, Time, Types } from 'phaser'
+import type { Room } from '@colyseus/sdk'
+import { NAME_MAX_LENGTH } from '../../../shared/constants'
+import { isValidPlayerName, sanitizePlayerName } from '../../../shared/player-name'
+import { client } from '../../core/network'
 import { loadPlayerName, savePlayerName } from '../../core/player-name'
+import { setCurrentRoom } from '../../core/session'
+import { GameSelectionRoom } from './GameSelectionRoom'
 
-/** Subset of the Colyseus room listing, so the network can feed it 1:1 later. */
+/** What the Lobby shows per room. */
 export interface RoomListing {
   roomId: string
   name: string
   clients: number
   maxClients: number
+  /** Locked rooms reject joins; shown like full ones. */
+  locked: boolean
 }
 
-const PLACEHOLDER_ROOMS: RoomListing[] = [
-  { roomId: 'xK3f9aLq2', name: 'Pill Arena', clients: 3, maxClients: 8 },
-  { roomId: 'b7TzQw41p', name: 'Casual Fun', clients: 1, maxClients: 8 },
-  { roomId: 'Hn02vRmc8', name: 'Full House', clients: 8, maxClients: 8 },
-  { roomId: 'pQ9sLe5Yt', name: 'Practice', clients: 2, maxClients: 4 },
-]
+/** The fields we use from a room listing sent by the server's LobbyRoom (`IRoomCache`). */
+interface ListedRoom {
+  roomId: string
+  name: string
+  clients: number
+  maxClients: number
+  locked?: boolean
+  metadata?: { title?: string }
+}
+
+const toListing = (room: ListedRoom): RoomListing => ({
+  roomId: room.roomId,
+  name: room.metadata?.title ?? room.name,
+  clients: room.clients,
+  maxClients: room.maxClients,
+  locked: room.locked === true,
+})
+
+/** Room type the Create button makes (and the lobby lists). */
+const GAME_ROOM = 'my_room'
+const NAME_SYNC_DELAY = 300
+
+type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'failed'
 
 const PANEL_WIDTH = 1400
 const LIST_TOP = 300
@@ -26,8 +51,6 @@ const COL_ID = 960
 const SCROLL_SPEED = 0.6
 const SCROLLBAR_WIDTH = 12
 const HEADER_Y = 190
-const NAME_MIN_LENGTH = 4
-const NAME_MAX_LENGTH = 20
 
 /**
  * The list lives far off to the side of the world and is shown only through `listCam`,
@@ -60,11 +83,25 @@ export class Lobby extends Scene {
   nameInput: HTMLInputElement
   nameBlink: Animation
   playerName = ''
-  createdCount = 0
+  errorText: GameObjects.Text
+
+  /** Connection to the server's `lobby` room: the room list, and our name on the server. */
+  lobbyRoom: Room | undefined
+  status: ConnectionStatus = 'connecting'
+  /** A create/join request is in flight. */
+  busy = false
+  /** Set once the scene is going away; late connection results are dropped. */
+  disposed = false
+  nameSyncTimer: Time.TimerEvent
 
   /** Creating or joining a room needs a name of at least NAME_MIN_LENGTH characters. */
   get nameValid() {
-    return this.playerName.length >= NAME_MIN_LENGTH
+    return isValidPlayerName(this.playerName)
+  }
+
+  /** Create and Join are usable. */
+  get canEnterRoom() {
+    return this.status === 'connected' && this.nameValid && !this.busy
   }
 
   constructor() {
@@ -75,8 +112,15 @@ export class Lobby extends Scene {
     const { width, height } = this.scale
     const panelLeft = (width - PANEL_WIDTH) / 2
     this.listHeight = height - LIST_TOP - LIST_BOTTOM_MARGIN
-    // Before any button is built, so they start enabled when a valid name is stored
-    this.playerName = loadPlayerName().trim().slice(0, NAME_MAX_LENGTH)
+    // Scene instances are reused by scene.start, so reset per-run state
+    this.rooms.clear()
+    this.scrollY = 0
+    this.status = 'connecting'
+    this.busy = false
+    this.disposed = false
+    this.lobbyRoom = undefined
+    this.nameBlink = undefined
+    this.playerName = sanitizePlayerName(loadPlayerName())
 
     this.add.text(width / 2, 90, 'Lobby', {
       fontFamily: 'Arial Black', fontSize: 72, color: '#ffffff',
@@ -84,8 +128,11 @@ export class Lobby extends Scene {
     }).setOrigin(0.5)
 
     this.createRoomButton = this.createButton(panelLeft + PANEL_WIDTH - 140, HEADER_Y, 280, 70, 'Create room',
-      () => this.onCreateRoom(), this.nameValid)
+      () => this.onCreateRoom(), this.canEnterRoom)
     this.add.existing(this.createRoomButton)
+
+    this.errorText = this.add.text(width / 2, height - LIST_BOTTOM_MARGIN / 2, '', textStyle(26, '#d9776c'))
+      .setOrigin(0.5)
 
     this.createNameInput(panelLeft, HEADER_Y)
 
@@ -118,23 +165,83 @@ export class Lobby extends Scene {
       this.setScroll(this.scrollY + dy * SCROLL_SPEED)
     })
 
-    this.setRooms(PLACEHOLDER_ROOMS)
+    this.renderList()
+
+    // Switching games (Ctrl+←/→) destroys the game, which doesn't emit `shutdown`
+    this.events.once('shutdown', () => this.dispose())
+    this.events.once('destroy', () => this.dispose())
+
+    this.connect()
   }
 
-  /** Replace the whole list (future `"rooms"` message). */
+  /** Join the server's lobby room; the room list arrives as its messages. */
+  private async connect() {
+    this.setStatus('connecting')
+
+    let room: Room
+    try {
+      room = await client.joinOrCreate('lobby', { name: this.playerName })
+    } catch (e) {
+      console.warn('Lobby connection failed', e)
+      if (!this.disposed) this.setStatus('failed')
+      return
+    }
+
+    if (this.disposed) {
+      room.leave().catch(() => {})
+      return
+    }
+
+    this.lobbyRoom = room
+    room.onMessage('rooms', (rooms: ListedRoom[]) => this.setRooms(rooms.map(toListing)))
+    room.onMessage('+', ([, listed]: [string, ListedRoom]) => this.addRoom(toListing(listed)))
+    room.onMessage('-', (roomId: string) => this.removeRoom(roomId))
+    room.onDrop(() => { if (this.lobbyRoom === room) this.setStatus('reconnecting') })
+    room.onReconnect(() => { if (this.lobbyRoom === room) this.setStatus('connected') })
+    room.onLeave(() => {
+      // Only an unexpected leave: leaving on purpose clears `lobbyRoom` first
+      if (this.lobbyRoom !== room) return
+      this.lobbyRoom = undefined
+      if (!this.disposed) this.setStatus('failed')
+    })
+
+    this.setStatus('connected')
+  }
+
+  /** Leave the lobby room on purpose (entering a game room, or the scene going away). */
+  private leaveLobby() {
+    const room = this.lobbyRoom
+    this.lobbyRoom = undefined
+    room?.leave().catch(() => {})
+  }
+
+  private dispose() {
+    if (this.disposed) return
+    this.disposed = true
+    this.nameSyncTimer?.remove()
+    this.leaveLobby()
+  }
+
+  private setStatus(status: ConnectionStatus) {
+    this.status = status
+    if (status !== 'connected') this.rooms.clear()
+    this.refreshButtons()
+  }
+
+  /** Replace the whole list (`"rooms"` message). */
   setRooms(rooms: RoomListing[]) {
     this.rooms.clear()
     for (const room of rooms) this.rooms.set(room.roomId, room)
     this.renderList()
   }
 
-  /** Add or update one room (future `"+"` message). */
+  /** Add or update one room (`"+"` message). */
   addRoom(room: RoomListing) {
     this.rooms.set(room.roomId, room)
     this.renderList()
   }
 
-  /** Remove one room (future `"-"` message). */
+  /** Remove one room (`"-"` message). */
   removeRoom(roomId: string) {
     this.rooms.delete(roomId)
     this.renderList()
@@ -175,9 +282,10 @@ export class Lobby extends Scene {
       // maxLength stops typing past the limit; slice is a safety net for pasted text
       if (input.value.length > NAME_MAX_LENGTH) input.value = input.value.slice(0, NAME_MAX_LENGTH)
       const wasValid = this.nameValid
-      this.playerName = input.value.trim()
+      this.playerName = sanitizePlayerName(input.value)
       savePlayerName(this.playerName)
       if (this.nameValid !== wasValid) this.onNameValidChanged()
+      this.scheduleNameSync()
     })
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') input.blur()
@@ -185,6 +293,7 @@ export class Lobby extends Scene {
 
     this.game.domContainer.appendChild(input)
     this.events.once('shutdown', () => input.remove())
+    this.events.once('destroy', () => input.remove())
     this.nameInput = input
     this.updateNameBlink()
 
@@ -209,19 +318,59 @@ export class Lobby extends Scene {
 
   private onNameValidChanged() {
     this.updateNameBlink()
-    this.setButtonEnabled(this.createRoomButton, this.nameValid)
+    this.refreshButtons()
+  }
+
+  /** Re-apply the Create / Join enabled state (name, connection or busy state changed). */
+  private refreshButtons() {
+    this.setButtonEnabled(this.createRoomButton, this.canEnterRoom)
     // Rows are rebuilt with the new Join state
     this.renderList()
   }
 
+  /** Tell the server our new name once typing pauses. Invalid names are kept local. */
+  private scheduleNameSync() {
+    this.nameSyncTimer?.remove()
+    this.nameSyncTimer = this.time.delayedCall(NAME_SYNC_DELAY, () => {
+      if (this.nameValid && this.status === 'connected') this.lobbyRoom?.send('setName', this.playerName)
+    })
+  }
+
   private onCreateRoom() {
-    this.createdCount++
-    const roomId = Math.random().toString(36).slice(2, 11)
-    this.addRoom({ roomId, name: `Room #${this.createdCount}`, clients: 1, maxClients: 8 })
+    this.enterRoom(() => client.create(GAME_ROOM, { name: this.playerName }))
   }
 
   private onJoinRoom(room: RoomListing) {
-    console.log('join', room.roomId)
+    this.enterRoom(() => client.joinById(room.roomId, { name: this.playerName }))
+  }
+
+  /** Create or join a game room, then leave the lobby and switch to the room's scene. */
+  private async enterRoom(request: () => Promise<Room>) {
+    if (!this.canEnterRoom) return
+    this.busy = true
+    this.errorText.setText('')
+    this.refreshButtons()
+
+    let room: Room
+    try {
+      room = await request()
+    } catch (e) {
+      console.warn('Entering room failed', e)
+      if (this.disposed) return
+      this.busy = false
+      this.errorText.setText(`Could not enter the room: ${e instanceof Error ? e.message : e}`)
+      this.refreshButtons()
+      return
+    }
+
+    if (this.disposed) {
+      room.leave().catch(() => {})
+      return
+    }
+
+    setCurrentRoom(room)
+    this.leaveLobby()
+    this.scene.start('GameSelectionRoom')
   }
 
   private maxScroll() {
@@ -252,9 +401,19 @@ export class Lobby extends Scene {
     this.list.removeAll(true)
 
     if (this.rooms.size === 0) {
+      const message = {
+        connecting: 'Connecting…',
+        reconnecting: 'Connection lost, reconnecting…',
+        failed: 'Cannot reach the server',
+        connected: 'No active rooms',
+      }[this.status]
       this.list.add(
-        this.add.text(PANEL_WIDTH / 2, ROW_HEIGHT, 'No active rooms', textStyle(32, '#9fb3bb')).setOrigin(0.5),
+        this.add.text(PANEL_WIDTH / 2, ROW_HEIGHT, message, textStyle(32, '#9fb3bb')).setOrigin(0.5),
       )
+
+      if (this.status === 'failed') {
+        this.list.add(this.createButton(PANEL_WIDTH / 2, ROW_HEIGHT * 2.2, 200, 60, 'Retry', () => this.connect()))
+      }
     }
 
     let i = 0
@@ -268,7 +427,7 @@ export class Lobby extends Scene {
   }
 
   private createRow(room: RoomListing, y: number, color: number) {
-    const full = room.clients >= room.maxClients
+    const full = room.locked || room.clients >= room.maxClients
     const midY = ROW_HEIGHT / 2
 
     const bg = this.add.rectangle(0, 0, PANEL_WIDTH, ROW_HEIGHT - 4, color).setOrigin(0)
@@ -277,7 +436,7 @@ export class Lobby extends Scene {
       textStyle(32, full ? '#d9776c' : '#ffffff')).setOrigin(0, 0.5)
     const id = this.add.text(COL_ID, midY, room.roomId, textStyle(26, '#9fb3bb')).setOrigin(0, 0.5)
     const join = this.createButton(PANEL_WIDTH - 100, midY - 2, 160, 50, full ? 'Full' : 'Join',
-      () => this.onJoinRoom(room), !full && this.nameValid)
+      () => this.onJoinRoom(room), !full && this.canEnterRoom)
 
     return this.add.container(0, y, [bg, name, players, id, join])
   }
@@ -316,6 +475,6 @@ export class Lobby extends Scene {
 }
 
 export const configLobby = {
-  scene: [Lobby],
+  scene: [Lobby, GameSelectionRoom],
   dom: { createContainer: true },
 }

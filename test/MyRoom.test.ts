@@ -1,15 +1,15 @@
 import assert from "assert";
-import { ColyseusTestServer, boot } from "@colyseus/testing";
+import type { ColyseusTestServer } from "@colyseus/testing";
 
-import appConfig from "../src/server/app.config.js";
+import type appConfig from "../src/server/app.config.js";
+import { testServer } from "./server.js";
 import { MyRoomState, type MoveInput } from "../src/server/rooms/schema/MiniGameRoomState.js";
 import { PLAYER_SPEED, TICK_RATE } from "../src/shared/constants.js";
 
 describe("testing your Colyseus app", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
 
-  before(async () => colyseus = await boot(appConfig));
-  after(async () => colyseus.shutdown());
+  before(async () => colyseus = await testServer());
 
   beforeEach(async () => {
     await colyseus.cleanup();
@@ -17,7 +17,7 @@ describe("testing your Colyseus app", () => {
 
   it("advances a player from its buffered input", async () => {
     const room = await colyseus.createRoom<MyRoomState>("my_room", {});
-    const client1 = await colyseus.connectTo(room);
+    const client1 = await colyseus.connectTo(room, { name: "Tester" });
 
     const player = room.state.players.get(client1.sessionId);
     assert.ok(player, "a Player is created on join");
@@ -36,7 +36,7 @@ describe("testing your Colyseus app", () => {
 
   it("clamps input that is out of range", async () => {
     const room = await colyseus.createRoom<MyRoomState>("my_room", {});
-    const client1 = await colyseus.connectTo(room);
+    const client1 = await colyseus.connectTo(room, { name: "Tester" });
 
     const player = room.state.players.get(client1.sessionId);
     const startX = player.x;

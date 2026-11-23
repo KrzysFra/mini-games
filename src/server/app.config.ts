@@ -5,13 +5,13 @@ import {
   playground,
   createRouter,
   createEndpoint,
-  LobbyRoom,
 } from "colyseus";
 
 /**
  * Import your Room files
  */
-import { MyRoom } from "./rooms/MiniGameRoom.js";
+import { GameSelectionRoom } from "./rooms/GameSelectionRoom.js";
+import { MainLobbyRoom } from "./rooms/MainLobbyRoom.js";
 
 const server = defineServer({
 
@@ -19,8 +19,8 @@ const server = defineServer({
    * Define your room handlers:
    */
   rooms: {
-    my_room: defineRoom(MyRoom).enableRealtimeListing(),
-    lobby: defineRoom(LobbyRoom),
+    my_room: defineRoom(GameSelectionRoom).enableRealtimeListing(),
+    lobby: defineRoom(MainLobbyRoom),
   },
 
   /**
