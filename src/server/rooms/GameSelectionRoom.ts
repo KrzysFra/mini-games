@@ -1,33 +1,21 @@
-import { Room, Client, CloseCode, type StepContext } from "colyseus";
-import { MyRoomState, Player, MoveInput } from "./schema/MiniGameRoomState.js";
-import { stepEntity } from "../../shared/movement.js";
-import { isValidPlayerName, sanitizePlayerName } from "../../shared/player-name.js";
-import { TICK_RATE, ARENA_WIDTH, ARENA_HEIGHT, MAX_PLAYERS_PER_ROOM } from "../../shared/constants.js";
-import { isMiniGameId } from "../../shared/games.js";
+import { Client, CloseCode, Room } from "colyseus"
+import { DEFAULT_DOT_COLOR, MAX_PLAYERS_PER_ROOM } from "../../shared/constants.js"
+import { isMiniGameId } from "../../shared/games.js"
+import { isValidPlayerName, sanitizePlayerName } from "../../shared/player-name.js"
+import { GameSelectionRoomState, Player } from "./schema/MiniGameRoomState.js"
 
-export class GameSelectionRoom extends Room<{ state: MyRoomState, input: MoveInput }> {
+export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
   maxClients = MAX_PLAYERS_PER_ROOM;
-  state = new MyRoomState();
+  state = new GameSelectionRoomState();
 
-  /**
-   * Per-client input buffer. `sanitize` clamps every field as it is decoded —
-   * never trust the wire — and the buffer holds ~2s of inputs at this tick rate
-   * so a burst after a stall still replays in order.
-   */
-  inputs = this.defineInput(MoveInput, {
-    bufferMaxSize: 64,
-    sanitize: { moveX: [-1, 1], moveY: [-1, 1] },
-  });
-
-  private joinCount = 0;
-
-  /** Movement arrives through the input buffer above; these are the non-input messages. */
   messages = {
     /** The player is (or is no longer) ready to start the selected mini-game. */
     setReady: (client: Client, ready: unknown) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player || typeof ready !== "boolean") { return; }
-      player.ready = ready;
+      if (this.state.phase !== "selection") { return }
+      const player = this.state.players.get(client.sessionId)
+      if (!player || typeof ready !== "boolean") { return }
+      player.ready = ready
+      this.startIfAllReady()
     },
 
     /**
@@ -35,62 +23,85 @@ export class GameSelectionRoom extends Room<{ state: MyRoomState, input: MoveInp
      * the previous game, not this one.
      */
     selectGame: (client: Client, id: unknown) => {
-      if (!this.state.players.has(client.sessionId) || !isMiniGameId(id)) { return; }
-      if (id === this.state.selectedMiniGame) { return; }
+      if (this.state.phase !== "selection") { return }
+      if (!this.state.players.has(client.sessionId) || !isMiniGameId(id)) { return }
+      if (id === this.state.selectedMiniGame) { return }
 
-      this.state.selectedMiniGame = id;
+      this.state.selectedMiniGame = id
       for (const player of this.state.players.values()) {
-        player.ready = false;
+        player.ready = false
       }
+    },
+
+    /** Placeholder game: the player pressed a key, so their dot gets a random color (picked here, never by the client). */
+    changeColor: (client: Client) => {
+      if (this.state.phase !== "playing") { return }
+      const player = this.state.players.get(client.sessionId)
+      if (!player) { return }
+      player.color = Math.floor(Math.random() * 0x1000000)
+    },
+
+    /** Placeholder game: the player wants to stop. Once everyone has, the room goes back to game selection. */
+    escape: (client: Client) => {
+      if (this.state.phase !== "playing") { return }
+      const player = this.state.players.get(client.sessionId)
+      if (!player) { return }
+      player.escaped = true
+      this.endIfAllEscaped()
     },
   };
 
   onCreate(options: any) {
-    this.setFixedTimestep((ctx) => this.step(ctx), TICK_RATE);
     // The lobby lists rooms by type ("my_room"); the title is what players see.
-    this.setMetadata({ title: `${sanitizePlayerName(options?.name) || "Unnamed"}'s room` });
+    this.setMetadata({ title: `${sanitizePlayerName(options?.name) || "Unnamed"}'s room` })
   }
 
   onJoin(client: Client, options: any) {
-    const name = sanitizePlayerName(options?.name);
+    const name = sanitizePlayerName(options?.name)
     if (!isValidPlayerName(name)) {
-      throw new Error("A player name is required to join.");
+      throw new Error("A player name is required to join.")
     }
 
-    // Deterministic spawn ring, so two players never start on top of each other.
-    const angle = this.joinCount++ * 2.399963;
-    this.state.players.set(client.sessionId, new Player({
-      name,
-      x: ARENA_WIDTH / 2 + Math.cos(angle) * 80,
-      y: ARENA_HEIGHT / 2 + Math.sin(angle) * 80,
-      vx: 0,
-      vy: 0,
-    }));
-    console.log(client.sessionId, "joined as", name);
+    this.state.players.set(client.sessionId, new Player({ name }))
+    console.log(client.sessionId, "joined as", name)
   }
 
   onLeave(client: Client, code: CloseCode) {
-    console.log(client.sessionId, "left!", code);
-    this.state.players.delete(client.sessionId);
+    console.log(client.sessionId, "left!", code)
+    this.state.players.delete(client.sessionId)
+    // The only player who wasn't ready (or hadn't escaped) may just have left
+    this.startIfAllReady()
+    this.endIfAllEscaped()
   }
 
   onDispose() {
-    console.log("room", this.roomId, "disposing...");
+    console.log("room", this.roomId, "disposing...")
+  }
+
+  /** Start the selected mini-game once every player in the room is ready. */
+  private startIfAllReady() {
+    if (this.state.phase !== "selection" || this.state.players.size === 0) { return }
+    for (const player of this.state.players.values()) {
+      if (!player.ready) { return }
+    }
+    this.state.phase = "playing"
   }
 
   /**
-   * One shared `stepEntity` per received input, so the set the client predicted
-   * is exactly the set the server applied. A client that sends nothing simply
-   * does not move — an empty tick advances no one.
+   * Back to game selection once every player has escaped the running game. Everyone's
+   * per-game state resets, so the next game starts fresh and needs a new round of ready.
    */
-  private step(ctx: StepContext) {
-    for (const [sessionId, player] of this.state.players) {
-      const channel = this.inputs.get(sessionId);
-      if (!channel) { continue; }
+  private endIfAllEscaped() {
+    if (this.state.phase !== "playing" || this.state.players.size === 0) { return }
+    for (const player of this.state.players.values()) {
+      if (!player.escaped) { return }
+    }
 
-      for (const input of channel) {
-        stepEntity(player, input, ctx.dt);
-      }
+    this.state.phase = "selection"
+    for (const player of this.state.players.values()) {
+      player.ready = false
+      player.escaped = false
+      player.color = DEFAULT_DOT_COLOR
     }
   }
 
@@ -104,10 +115,10 @@ export class GameSelectionRoom extends Room<{ state: MyRoomState, input: MoveInp
     // or onLeave() by itself. The catch is only here because the promise also
     // rejects when the room is already disposing (server shutdown), which would
     // otherwise surface as an unhandled rejection.
-    this.allowReconnection(client, 30).catch(() => {});
+    this.allowReconnection(client, 30).catch(() => { })
   }
 
   onReconnect(client: Client) {
-    console.log(client.sessionId, "reconnected!");
+    console.log(client.sessionId, "reconnected!")
   }
 }

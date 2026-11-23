@@ -7,6 +7,7 @@ import { loadPlayerName, savePlayerName } from '../../core/player-name'
 import { hasResumableSession, leaveCurrentRoom, resumeSession, setCurrentRoom } from '../../core/session'
 import { createButton, setButtonEnabled, textStyle, titleStyle } from '../../core/ui'
 import { GameSelectionRoom } from './GameSelectionRoom'
+import { PlaceholderGame } from './placeholder-game/PlaceholderGame'
 
 /** What the Lobby shows per room. */
 export interface RoomListing {
@@ -451,6 +452,6 @@ export class Lobby extends Scene {
 }
 
 export const configLobby = {
-  scene: [Lobby, GameSelectionRoom],
+  scene: [Lobby, GameSelectionRoom, PlaceholderGame],
   dom: { createContainer: true },
 }

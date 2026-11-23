@@ -12,6 +12,7 @@ interface PlayerView {
 }
 
 interface RoomStateView {
+  phase: string
   selectedMiniGame: string
   players: Map<string, PlayerView>
 }
@@ -182,6 +183,12 @@ export class GameSelectionRoom extends Scene {
   private render() {
     const state = this.state
     if (!state) return
+
+    // Everyone is ready: the selected mini-game runs (every game is the placeholder for now)
+    if (state.phase === 'playing') {
+      this.scene.start('PlaceholderGame')
+      return
+    }
 
     const index = miniGameIndex(state.selectedMiniGame)
     const game = MINI_GAMES[index]

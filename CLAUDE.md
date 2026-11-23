@@ -29,7 +29,8 @@ src/client/core/session.ts   the game room the player is in (`currentRoom`), out
 src/client/sandbox/    experiments & prototypes (examples/, pill-move/) — not real games
 src/client/game/scenes Lobby.ts (startup scene: connects to the `lobby` room, name input, live room list,
                        create/join), GameSelectionRoom.ts (after entering a room: leave/ready buttons, mini-game picker,
-                       8 player slots with ready state — all rendered from the room state);
+                       8 player slots with ready state — all rendered from the room state),
+                       placeholder-game/PlaceholderGame.ts (one dot per player, any key → random color);
                        Boot/Preloader/MainMenu/Game/GameOver are unused Phaser template scenes
 src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
 src/shared/            code used by BOTH sides: constants, player-name sanitizing, games.ts (`MINI_GAMES`
@@ -76,7 +77,14 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   the Lobby leaves `lobby` and starts `GameSelectionRoom`. `MyRoom` rejects joins without a valid name
   and puts a display `title` ("<name>'s room") in its metadata — the listing's `name` is the room type.
 - Game selection room messages: `setReady` (boolean) and `selectGame` (a `MINI_GAMES` id; any player may
-  switch, and switching resets everyone's `ready`).
+  switch, and switching resets everyone's `ready`). Both only apply while `phase` is `"selection"`.
+- Room `phase`: `"selection"` → `"playing"` once every player is ready (checked on `setReady` and on leave).
+  Clients follow it: GameSelectionRoom starts `PlaceholderGame` (every `MINI_GAMES` entry maps to it
+  for now), which goes back if the phase returns to `"selection"`.
+- Placeholder game messages (no payload, `"playing"` only): `changeColor` — the server picks a random
+  `Player.color`; dots start at `DEFAULT_DOT_COLOR` (red). `escape` (Escape key) — sets `Player.escaped`
+  ("ESC" in the dot); once every player has escaped (checked on `escape` and on leave) the phase returns
+  to `"selection"` and everyone's `ready`/`escaped`/`color` reset.
 - Player names: `sanitizePlayerName` / `isValidPlayerName` in `src/shared/player-name.ts`
   (`NAME_MIN_LENGTH` / `NAME_MAX_LENGTH` in `shared/constants.ts`); the server re-sanitizes everything.
 - Scenes must clean up on `destroy` as well as `shutdown`: Ctrl+←/→ destroys the whole game, which

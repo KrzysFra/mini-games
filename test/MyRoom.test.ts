@@ -3,8 +3,8 @@ import type { ColyseusTestServer } from "@colyseus/testing";
 
 import type appConfig from "../src/server/app.config.js";
 import { testServer } from "./server.js";
-import { MyRoomState, type MoveInput } from "../src/server/rooms/schema/MiniGameRoomState.js";
-import { PLAYER_SPEED, TICK_RATE } from "../src/shared/constants.js";
+import { GameSelectionRoomState } from "../src/server/rooms/schema/MiniGameRoomState.js";
+import { DEFAULT_DOT_COLOR } from "../src/shared/constants.js";
 import { MINI_GAMES } from "../src/shared/games.js";
 
 describe("testing your Colyseus app", () => {
@@ -16,47 +16,18 @@ describe("testing your Colyseus app", () => {
     await colyseus.cleanup();
   });
 
-  it("advances a player from its buffered input", async () => {
-    const room = await colyseus.createRoom<MyRoomState>("my_room", {});
+  it("adds a player with their name on join", async () => {
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
     const client1 = await colyseus.connectTo(room, { name: "Tester" });
 
     const player = room.state.players.get(client1.sessionId);
     assert.ok(player, "a Player is created on join");
-    const startX = player.x;
-
-    const input = client1.input<MoveInput>({ mode: "reliable" });
-    input.data.moveX = 1;
-    input.data.moveY = 0;
-    input.send();
-
-    await room.waitForNextMessage();  // the input reaches the server
-    await room.waitForNextTimestep(); // the step that consumes it runs
-
-    assert.ok(player.x > startX, "the buffered input advanced the player");
-  });
-
-  it("clamps input that is out of range", async () => {
-    const room = await colyseus.createRoom<MyRoomState>("my_room", {});
-    const client1 = await colyseus.connectTo(room, { name: "Tester" });
-
-    const player = room.state.players.get(client1.sessionId);
-    const startX = player.x;
-
-    // A modified client claiming a huge axis value: sanitize clamps it to 1.
-    const input = client1.input<MoveInput>({ mode: "reliable" });
-    input.data.moveX = 100 as any;
-    input.send();
-
-    await room.waitForNextMessage();
-    await room.waitForNextTimestep();
-
-    // The room steps once per received input, so one input is exactly one step
-    // of travel — at moveX clamped to 1, not the 100 the client asked for.
-    assert.strictEqual(player.x, startX + PLAYER_SPEED * (1 / TICK_RATE));
+    assert.strictEqual(player.name, "Tester");
+    assert.strictEqual(player.color, DEFAULT_DOT_COLOR);
   });
 
   it("keeps a dropped player's seat for a reconnect by token (page reload)", async () => {
-    const room = await colyseus.createRoom<MyRoomState>("my_room", {});
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
     const client1 = await colyseus.connectTo(room, { name: "Tester" });
     const { sessionId, reconnectionToken } = client1;
 
@@ -72,8 +43,10 @@ describe("testing your Colyseus app", () => {
   });
 
   it("toggles a player's ready flag, ignoring non-boolean values", async () => {
-    const room = await colyseus.createRoom<MyRoomState>("my_room", {});
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
     const client1 = await colyseus.connectTo(room, { name: "Tester" });
+    // A second, unready player keeps the game from starting
+    await colyseus.connectTo(room, { name: "Tester2" });
     const player = room.state.players.get(client1.sessionId);
     assert.strictEqual(player.ready, false);
 
@@ -91,7 +64,7 @@ describe("testing your Colyseus app", () => {
   });
 
   it("selects a known mini-game and resets everyone's ready flag", async () => {
-    const room = await colyseus.createRoom<MyRoomState>("my_room", {});
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
     const client1 = await colyseus.connectTo(room, { name: "Tester" });
     const client2 = await colyseus.connectTo(room, { name: "Tester2" });
     assert.strictEqual(room.state.selectedMiniGame, MINI_GAMES[0].id);
@@ -106,5 +79,107 @@ describe("testing your Colyseus app", () => {
     client2.send("selectGame", "not-a-game");
     await room.waitForNextMessage();
     assert.strictEqual(room.state.selectedMiniGame, MINI_GAMES[1].id, "unknown ids are ignored");
+  });
+
+  it("starts the game once every player is ready", async () => {
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
+    const client1 = await colyseus.connectTo(room, { name: "Tester" });
+    const client2 = await colyseus.connectTo(room, { name: "Tester2" });
+
+    client1.send("setReady", true);
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "selection", "one player is still not ready");
+
+    client2.send("setReady", true);
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "playing");
+  });
+
+  it("starts the game when the last unready player leaves", async () => {
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
+    const client1 = await colyseus.connectTo(room, { name: "Tester" });
+    const client2 = await colyseus.connectTo(room, { name: "Tester2" });
+
+    client1.send("setReady", true);
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "selection");
+
+    await client2.leave();
+    await room.waitForNextPatch();
+    assert.strictEqual(room.state.phase, "playing");
+  });
+
+  it("changes a player's dot color only while playing", async () => {
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
+    const client1 = await colyseus.connectTo(room, { name: "Tester" });
+    const player = room.state.players.get(client1.sessionId);
+
+    client1.send("changeColor");
+    await room.waitForNextMessage();
+    assert.strictEqual(player.color, DEFAULT_DOT_COLOR, "ignored in the selection room");
+
+    client1.send("setReady", true);
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "playing");
+
+    // A random color could happen to be red again; a few presses make that vanishingly unlikely
+    for (let i = 0; i < 3 && player.color === DEFAULT_DOT_COLOR; i++) {
+      client1.send("changeColor");
+      await room.waitForNextMessage();
+    }
+    assert.notStrictEqual(player.color, DEFAULT_DOT_COLOR);
+    assert.ok(player.color >= 0 && player.color <= 0xffffff);
+  });
+
+  it("returns to game selection once every player has escaped, resetting them", async () => {
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
+    const client1 = await colyseus.connectTo(room, { name: "Tester" });
+    const client2 = await colyseus.connectTo(room, { name: "Tester2" });
+    const player1 = room.state.players.get(client1.sessionId);
+    const player2 = room.state.players.get(client2.sessionId);
+
+    client1.send("escape");
+    await room.waitForNextMessage();
+    assert.strictEqual(player1.escaped, false, "ignored in the selection room");
+
+    client1.send("setReady", true);
+    await room.waitForNextMessage();
+    client2.send("setReady", true);
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "playing");
+
+    client1.send("changeColor");
+    await room.waitForNextMessage();
+    client1.send("escape");
+    await room.waitForNextMessage();
+    assert.strictEqual(player1.escaped, true);
+    assert.strictEqual(room.state.phase, "playing", "one player is still playing");
+
+    client2.send("escape");
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "selection");
+    for (const player of [player1, player2]) {
+      assert.strictEqual(player.escaped, false);
+      assert.strictEqual(player.ready, false);
+      assert.strictEqual(player.color, DEFAULT_DOT_COLOR);
+    }
+  });
+
+  it("returns to game selection when the last player still playing leaves", async () => {
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
+    const client1 = await colyseus.connectTo(room, { name: "Tester" });
+    const client2 = await colyseus.connectTo(room, { name: "Tester2" });
+
+    client1.send("setReady", true);
+    await room.waitForNextMessage();
+    client2.send("setReady", true);
+    await room.waitForNextMessage();
+    client1.send("escape");
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "playing");
+
+    await client2.leave();
+    await room.waitForNextPatch();
+    assert.strictEqual(room.state.phase, "selection");
   });
 });
