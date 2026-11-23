@@ -13,6 +13,33 @@ export const Player = schema({
 })
 export type Player = SchemaType<typeof Player>
 
+/** A car in car-roquelike: its full physics state, so clients can adopt it for prediction. */
+export const Car = schema({
+  x: t.float32(),
+  y: t.float32(),
+  angle: t.float32(),
+  vx: t.float32(),
+  vy: t.float32(),
+  /** Angular velocity. */
+  av: t.float32(),
+  /** Seat index: picks the spawn point and the car's color. */
+  seat: t.uint8(),
+})
+export type Car = SchemaType<typeof Car>
+
+/**
+ * One player input per fixed tick (`defineInput`), shared by every mini-game that needs
+ * continuous input: two analog axes plus a button bitmask.
+ */
+export const GameInput = schema({
+  /** car-roquelike: (x, y) = the direction to drive in (+y down), its length the throttle; 0 = brake. */
+  x: t.float32(),
+  y: t.float32(),
+  /** Bit flags, see `INPUT_BUTTONS` in `shared/constants.ts`. */
+  buttons: t.uint8(),
+})
+export type GameInput = SchemaType<typeof GameInput>
+
 /** "selection": picking a game in the selection room; "playing": the selected mini-game runs. */
 export type RoomPhase = "selection" | "playing"
 
@@ -21,5 +48,7 @@ export const GameSelectionRoomState = schema({
   /** Id of the mini-game picked in the selection room (one of `MINI_GAMES`). */
   selectedMiniGame: t.string().default(DEFAULT_MINI_GAME),
   players: t.map(Player),
+  /** car-roquelike: one car per player (by sessionId) while the game runs. */
+  cars: t.map(Car),
 })
 export type GameSelectionRoomState = SchemaType<typeof GameSelectionRoomState>

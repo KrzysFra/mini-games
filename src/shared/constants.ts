@@ -14,6 +14,13 @@ export const PLAYER_SPEED = 260;
 export const NAME_MIN_LENGTH = 4;
 export const NAME_MAX_LENGTH = 20;
 
+/** Bits of the `buttons` field of a player's per-tick input. */
+export const INPUT_BUTTONS = {
+  /** car-roquelike: handbrake. */
+  ACTION: 1,
+} as const;
+export const INPUT_BUTTONS_MASK = 0b1;
+
 /** Seats in a game room; the selection screen shows one player slot per seat. */
 export const MAX_PLAYERS_PER_ROOM = 8;
 

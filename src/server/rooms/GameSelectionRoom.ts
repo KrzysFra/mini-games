@@ -1,12 +1,34 @@
 import { Client, CloseCode, Room } from "colyseus"
-import { DEFAULT_DOT_COLOR, MAX_PLAYERS_PER_ROOM } from "../../shared/constants.js"
+import { DEFAULT_DOT_COLOR, INPUT_BUTTONS_MASK, MAX_PLAYERS_PER_ROOM, TICK_RATE } from "../../shared/constants.js"
 import { isMiniGameId } from "../../shared/games.js"
+import { PHYSICS_SUBSTEPS } from "../../shared/games/car-roquelike/constants.js"
 import { isValidPlayerName, sanitizePlayerName } from "../../shared/player-name.js"
-import { GameSelectionRoomState, Player } from "./schema/MiniGameRoomState.js"
+import { serverMiniGame } from "../games/registry.js"
+import type { ServerMiniGame } from "../games/types.js"
+import { GameInput, GameSelectionRoomState, Player } from "./schema/MiniGameRoomState.js"
 
-export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
+const clampAxis = (value: number) => (Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0)
+
+export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState, input: GameInput }> {
   maxClients = MAX_PLAYERS_PER_ROOM;
   state = new GameSelectionRoomState();
+
+  /**
+   * One input per player per fixed tick, for mini-games that simulate continuously. Never trusted:
+   * axes are clamped to -1..1 and unknown buttons dropped. A tick with no input (a packet gap)
+   * repeats the player's last one, so a held key keeps acting.
+   */
+  inputs = this.defineInput(GameInput, {
+    sanitize: (input: GameInput) => {
+      input.x = clampAxis(input.x)
+      input.y = clampAxis(input.y)
+      input.buttons = (input.buttons | 0) & INPUT_BUTTONS_MASK
+    },
+    idle: ({ latest }) => latest ?? true,
+  });
+
+  /** The running mini-game's simulation, if the selected game has one. */
+  protected activeGame: ServerMiniGame | undefined;
 
   messages = {
     /** The player is (or is no longer) ready to start the selected mini-game. */
@@ -47,6 +69,7 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
       const player = this.state.players.get(client.sessionId)
       if (!player) { return }
       player.escaped = true
+      console.log(client.sessionId, "escaped")
       this.endIfAllEscaped()
     },
   };
@@ -54,6 +77,14 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
   onCreate(options: any) {
     // The lobby lists rooms by type ("my_room"); the title is what players see.
     this.setMetadata({ title: `${sanitizePlayerName(options?.name) || "Unnamed"}'s room` })
+    this.startSimulationLoop()
+  }
+
+  /** Fixed-tick loop driving the running mini-game's simulation; call once from `onCreate`. */
+  protected startSimulationLoop() {
+    // Inputs at TICK_RATE, physics sub-stepped inside each tick (the same numbers reach predicting clients)
+    this.setFixedTimestep(ctx => this.activeGame?.step(ctx, this.inputs), TICK_RATE, { subSteps: PHYSICS_SUBSTEPS })
+    this.patchRate = 1000 / TICK_RATE
   }
 
   onJoin(client: Client, options: any) {
@@ -63,18 +94,21 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
     }
 
     this.state.players.set(client.sessionId, new Player({ name }))
+    this.activeGame?.addPlayer(client.sessionId)
     console.log(client.sessionId, "joined as", name)
   }
 
   onLeave(client: Client, code: CloseCode) {
     console.log(client.sessionId, "left!", code)
     this.state.players.delete(client.sessionId)
+    this.activeGame?.removePlayer(client.sessionId)
     // The only player who wasn't ready (or hadn't escaped) may just have left
     this.startIfAllReady()
     this.endIfAllEscaped()
   }
 
   onDispose() {
+    this.stopGame()
     console.log("room", this.roomId, "disposing...")
   }
 
@@ -84,7 +118,21 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
     for (const player of this.state.players.values()) {
       if (!player.ready) { return }
     }
+    this.startGame()
+  }
+
+  /** Switch to `"playing"` and start the selected mini-game's simulation (if it has one). */
+  protected startGame() {
+    this.stopGame()
     this.state.phase = "playing"
+    this.activeGame = serverMiniGame(this.state.selectedMiniGame)?.(this.state)
+    console.log("room", this.roomId, "started", this.state.selectedMiniGame)
+  }
+
+  /** Dispose the running simulation, clearing what it put in the state. */
+  protected stopGame() {
+    this.activeGame?.dispose()
+    this.activeGame = undefined
   }
 
   /**
@@ -101,6 +149,7 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState }> {
 
   /** The running mini-game is over: back to game selection. */
   protected endGame() {
+    this.stopGame()
     this.state.phase = "selection"
     this.resetPlayers()
   }

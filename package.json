@@ -23,6 +23,7 @@
     "@colyseus/sdk": "^0.18.1",
     "@colyseus/testing": "^0.18.5",
     "@types/express": "^5.0.6",
+    "@types/matter-js": "^0.20.2",
     "@types/mocha": "^10.0.1",
     "@types/node": "^22.13.13",
     "mocha": "^11.7.5",
@@ -38,6 +39,7 @@
     "@colyseus/tools": "^0.18.1",
     "colyseus": "^0.18.2",
     "express": "^5.2.1",
+    "matter-js": "^0.20.0",
     "phaser": "^4.2.1"
   }
 }

@@ -7,6 +7,7 @@ export interface MiniGameInfo {
 
 /** The selectable mini-games, in the order the selection arrows cycle through them. */
 export const MINI_GAMES: readonly MiniGameInfo[] = [
+  { id: "car-roquelike", title: "car-roquelike", description: "Drive, crash, repeat." },
   { id: "placeholder-1", title: "Placeholder Game 1", description: "A mini-game yet to be made." },
   { id: "placeholder-2", title: "Placeholder Game 2", description: "Another mini-game yet to be made." },
   { id: "placeholder-3", title: "Placeholder Game 3", description: "Yet another mini-game to be made." },

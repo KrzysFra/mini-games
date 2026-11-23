@@ -15,8 +15,14 @@ const placeholder: ClientMiniGame = {
   load: () => import('./placeholder/PlaceholderGame').then(m => m.PlaceholderGame),
 }
 
+const carRoquelike: ClientMiniGame = {
+  key: 'CarRoquelikeGame',
+  load: () => import('./car-roquelike/CarRoquelikeGame').then(m => m.CarRoquelikeGame),
+}
+
 /** Client side of each `MINI_GAMES` entry (`src/shared/games.ts`), by id. */
 const CLIENT_MINI_GAMES: Record<string, ClientMiniGame> = {
+  'car-roquelike': carRoquelike,
   'placeholder-1': placeholder,
   'placeholder-2': placeholder,
   'placeholder-3': placeholder,

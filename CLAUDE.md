@@ -33,12 +33,16 @@ src/client/game/scenes Lobby.ts (startup scene: connects to the `lobby` room, na
                        8 player slots with ready state — all rendered from the room state)
 src/client/games/      mini-game scenes: registry.ts (`MINI_GAMES` id → scene key + lazy `import()`),
                        MiniGameScene.ts (base: room handlers, back to selection/lobby),
-                       placeholder/PlaceholderGame.ts (one dot per player, any key → random color)
+                       placeholder/PlaceholderGame.ts (one dot per player, any key → random color),
+                       car-roquelike/CarRoquelikeGame.ts (top-down cars, predicted; see car-roquelike in Notes)
+src/server/games/      server side of mini-games that simulate: registry.ts (`MINI_GAMES` id → `ServerMiniGame`
+                       factory), types.ts, car-roquelike/CarRoquelikeSim.ts (authoritative matter world)
+src/shared/games/      per-game shared code: car-roquelike/ (constants, map, physics.ts on `matter-js`)
 src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
 src/server/rooms/GameSelectionRoom.ts   the game room (type `my_room`): selection → playing
 src/server/rooms/SandboxRoom.ts   dev-only `sandbox` room (extends GameSelectionRoom)
 src/shared/            code used by BOTH sides: constants, player-name sanitizing, games.ts (`MINI_GAMES`
-                       list, placeholders for now), pure simulation logic
+                       list: car-roquelike first/default, then placeholders), pure simulation logic
 public/                static assets (served at /, e.g. 'assets/block.png')
 test/                  server tests; all files share one booted server via `test/server.ts`
 ```
@@ -70,6 +74,13 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `schema({...})` / `t.*` API plus `SchemaType<>` type exports (not decorators).
 - **Player input**: sent through `Room.defineInput()` with a `sanitize` clamp — never trust client values.
   Simulation runs on a fixed timestep (`setFixedTimestep`, `TICK_RATE` in `shared/constants.ts`).
+  `GameSelectionRoom` has one input schema for every mini-game, `GameInput` (`x`, `y` axes clamped to -1..1,
+  `buttons` bitmask, see `INPUT_BUTTONS`); an empty tick repeats the player's last input (`idle`). Its fixed
+  tick steps the running `ServerMiniGame` (created by `startGame()` when `phase` becomes `"playing"`,
+  disposed by `stopGame()`), which takes exactly one input per player per tick (`inputs.get(id).next()`).
+- **Physics engines for multiplayer**: use standalone `matter-js` in `src/shared/games/<game>/`, not
+  Phaser's Matter plugin (Phaser steps it on its render clock; rollback needs fixed-dt stepping and
+  replay, and the server needs the same engine). Phaser only draws.
 - **Shared simulation code** (`src/shared/`) must be pure: a function of (state, input, dt) only — no
   clocks, randomness, or outside reads — so client prediction matches the server. Use structural
   interfaces, not schema classes.
@@ -88,17 +99,32 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
 - Game selection room messages: `setReady` (boolean) and `selectGame` (a `MINI_GAMES` id; any player may
   switch, and switching resets everyone's `ready`). Both only apply while `phase` is `"selection"`.
 - Room `phase`: `"selection"` → `"playing"` once every player is ready (checked on `setReady` and on leave).
-  Clients follow it: GameSelectionRoom starts the selected game's scene via the registry (every
-  `MINI_GAMES` entry maps to `PlaceholderGame` for now), which goes back if the phase returns to `"selection"`.
+  Clients follow it: GameSelectionRoom starts the selected game's scene via the registry (`car-roquelike` →
+  `CarRoquelikeGame`, the placeholder entries → `PlaceholderGame`), which goes back if the phase returns to `"selection"`.
 - Placeholder game messages (no payload, `"playing"` only): `changeColor` — the server picks a random
   `Player.color`; dots start at `DEFAULT_DOT_COLOR` (red). `escape` (Escape key) — sets `Player.escaped`
   ("ESC" in the dot); once every player has escaped (checked on `escape` and on leave) the phase returns
   to `"selection"` and everyone's `ready`/`escaped`/`color` reset.
+- **car-roquelike**: server-authoritative matter world (`CarRoquelikeSim`, 30 inputs/s, physics
+  sub-stepped ×2 = 60 Hz, `patchRate` = one tick); every car's full state is in `state.cars` (by sessionId,
+  `seat` picks spawn/color; cleared when the game ends). The client runs the same `physics.ts` world and
+  predicts its own car with `predict.sim` (`@colyseus/sdk` `Predict`): it adopts all server cars on each
+  ack and replays unacked inputs; other cars are drawn with `attachAll('cars', lerp)`. Steering is
+  directional: input (`x`, `y`) is the world/screen direction to drive in (+y down; length = throttle,
+  0 = brake), and `resolveCarControls` steers toward it (proportional to the angle off, full at
+  `CAR_STEER_FULL_ANGLE`), with an automatic handbrake beyond `CAR_AUTO_HANDBRAKE_ANGLE` (80°); there is
+  no reverse. `INPUT_BUTTONS.ACTION` forces the handbrake. Keyboard (WASD/arrows), D-pad and `pad1`'s left
+  stick (round deadzone) are summed and capped at length 1; A/Space = handbrake, Start/Back = escape.
+  Cars without an input (others' cars in client prediction) coast. The scene enables gamepads itself via
+  `input: { gamepad: true }` in its settings (missing from Phaser 4's `SettingsConfig` type, so it's widened). Camera: north-up, follows, zooms out with speed;
+  the HUD is on a second camera (world and HUD in separate layers, each camera ignores the other).
+  Velocities are matter units (px per 1000/60 ms), which is also the physics step.
 - **Sandbox mode** (for developing a mini-game): put `VITE_SANDBOX=<MINI_GAMES id>` (or `true` for the
   default game) in `.env.local` (git-ignored) and restart `npm run dev`. Every client then skips the lobby:
   the Lobby scene `joinOrCreate`s the `sandbox` room (`filterBy(["game"])`, so all clients share one room)
   and starts the game scene directly. `SandboxRoom` starts in `"playing"` and stays there (all escaped →
-  players reset, no return to selection). Max `MAX_PLAYERS_PER_ROOM` players; more are rejected with
+  players reset and the game restarts, no return to selection). Its `onCreate` must not call
+  `super.onCreate` (that breaks the `filterBy` matchmaking); it calls `startSimulationLoop()` instead. Max `MAX_PLAYERS_PER_ROOM` players; more are rejected with
   "Sandbox is full" (enforced in `onJoin`; `maxClients` is unlimited so joinOrCreate never opens a second
   room). Players without a valid name become "Player N". The room is only registered when
   `NODE_ENV !== "production"`, and the client ignores `VITE_SANDBOX` outside `import.meta.env.DEV`.

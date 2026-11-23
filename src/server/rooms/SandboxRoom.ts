@@ -17,8 +17,9 @@ export class SandboxRoom extends GameSelectionRoom {
     if (!isMiniGameId(options?.game)) {
       throw new Error(`Unknown mini-game "${options?.game}".`);
     }
+    this.startSimulationLoop();
     this.state.selectedMiniGame = options.game;
-    this.state.phase = "playing";
+    this.startGame();
   }
 
   onJoin(client: Client, options: any) {
@@ -34,8 +35,9 @@ export class SandboxRoom extends GameSelectionRoom {
     });
   }
 
-  /** Everyone escaped: start the round over instead of returning to game selection. */
+  /** Everyone escaped: start the round over (fresh simulation) instead of returning to game selection. */
   protected endGame() {
     this.resetPlayers();
+    this.startGame();
   }
 }
