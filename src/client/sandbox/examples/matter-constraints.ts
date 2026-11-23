@@ -45,7 +45,7 @@ class MatterContraintsScene extends Scene {
   }
 }
 
-export const configMatterConstraits: Types.Core.GameConfig = {
+export const configMatterConstraints: Types.Core.GameConfig = {
   scale: { mode: Scale.FIT, autoCenter: Scale.CENTER_BOTH },
   type: AUTO,
   width: 1920,

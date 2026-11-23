@@ -1,7 +1,7 @@
 import { Room, Client, CloseCode, type StepContext } from "colyseus";
 import { MyRoomState, Player, MoveInput } from "./schema/MyRoomState.js";
-import { stepEntity } from "../shared/movement.js";
-import { TICK_RATE, ARENA_WIDTH, ARENA_HEIGHT } from "../shared/constants.js";
+import { stepEntity } from "../../shared/movement.js";
+import { TICK_RATE, ARENA_WIDTH, ARENA_HEIGHT } from "../../shared/constants.js";
 
 export class MyRoom extends Room<{ state: MyRoomState, input: MoveInput }> {
   maxClients = 8;

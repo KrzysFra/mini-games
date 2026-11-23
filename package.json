@@ -1,8 +1,8 @@
 {
   "private": true,
-  "name": "realtime",
+  "name": "mini-games",
   "version": "0.1.0",
-  "description": "A Colyseus multiplayer server",
+  "description": "Browser mini-games collection (Phaser + Colyseus)",
   "type": "module",
   "engines": {
     "node": ">= 22.0.0"

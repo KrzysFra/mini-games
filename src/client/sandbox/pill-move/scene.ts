@@ -1,7 +1,6 @@
 
 import Phaser from "phaser"
 import { PillMan } from "./pill-man"
-import { toRequestError } from "@colyseus/sdk/RoomRequest"
 
 class PillMove extends Phaser.Scene {
   player: Phaser.GameObjects.Container

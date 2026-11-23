@@ -14,9 +14,9 @@ Then open http://localhost:2567 for the playground, or /monitor for the monitor.
 
 ## Structure
 
-- `src/app.config.ts`: server configuration — rooms, HTTP routes, express middleware
-- `src/rooms/MyRoom.ts`: your room handler
-- `src/rooms/schema/MyRoomState.ts`: the state synchronized to every client in the room
+- `src/server/app.config.ts`: server configuration — rooms, HTTP routes, express middleware
+- `src/server/rooms/MyRoom.ts`: your room handler
+- `src/server/rooms/schema/MyRoomState.ts`: the state synchronized to every client in the room
 - `test/MyRoom.test.ts`: boots the real server and connects a real client
 - `loadtest/example.ts`: scriptable client for `npm run loadtest`
 - `ecosystem.config.cjs`: pm2 configuration, used when deploying to Colyseus Cloud
@@ -39,8 +39,8 @@ build step in development.
 
 ```
 index.html
-src/app.config.ts    server config (the plugin's `serverEntry`)
-src/rooms/           your rooms
+src/server/app.config.ts    server config (the plugin's `serverEntry`)
+src/server/rooms/    your rooms
 src/client/          browser code
 ```
 

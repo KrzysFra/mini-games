@@ -1,7 +1,7 @@
 import { AUTO, Game, Scale, Types } from 'phaser'
-import { configCursorKeys } from './game/scenes/examples/cursor-keys'
-import { configMatterConstraits } from './game/scenes/examples/matter-constraints'
-import { configPillMove } from './game/scenes/tests/pill-move/scene'
+import { configCursorKeys } from './sandbox/examples/cursor-keys'
+import { configMatterConstraints } from './sandbox/examples/matter-constraints'
+import { configPillMove } from './sandbox/pill-move/scene'
 
 let currentGameIndex = 0
 let currentGame: Game = undefined
@@ -9,7 +9,7 @@ let currentGame: Game = undefined
 const games = [
   configPillMove,
   configCursorKeys,
-  configMatterConstraits,
+  configMatterConstraints,
 ]
 
 export const screenWidth = 1920
