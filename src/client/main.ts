@@ -1,14 +1,19 @@
 import { AUTO, Game, Scale, Types } from 'phaser'
 import { configCursorKeys } from './game/scenes/examples/cursor-keys'
 import { configMatterConstraits } from './game/scenes/examples/matter-constraints'
+import { configPillMove } from './game/scenes/tests/pill-move/scene'
 
-let currentGameIndex = 1
+let currentGameIndex = 0
 let currentGame: Game = undefined
 
 const games = [
-  configMatterConstraits,
+  configPillMove,
   configCursorKeys,
+  configMatterConstraits,
 ]
+
+export const screenWidth = 1920
+export const screenHeight = 1080
 
 const startGame = (config: Types.Core.GameConfig) => {
   currentGame?.destroy(true)
@@ -16,8 +21,8 @@ const startGame = (config: Types.Core.GameConfig) => {
   currentGame = new Game({
     ...config,
     parent: 'game-container',
-    width: 1920,
-    height: 1080,
+    width: screenWidth,
+    height: screenHeight,
     scale: { mode: Scale.FIT, autoCenter: Scale.CENTER_BOTH },
     type: AUTO,
     backgroundColor: '#30373a',
