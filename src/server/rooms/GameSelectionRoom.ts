@@ -2,10 +2,11 @@ import { Room, Client, CloseCode, type StepContext } from "colyseus";
 import { MyRoomState, Player, MoveInput } from "./schema/MiniGameRoomState.js";
 import { stepEntity } from "../../shared/movement.js";
 import { isValidPlayerName, sanitizePlayerName } from "../../shared/player-name.js";
-import { TICK_RATE, ARENA_WIDTH, ARENA_HEIGHT } from "../../shared/constants.js";
+import { TICK_RATE, ARENA_WIDTH, ARENA_HEIGHT, MAX_PLAYERS_PER_ROOM } from "../../shared/constants.js";
+import { isMiniGameId } from "../../shared/games.js";
 
 export class GameSelectionRoom extends Room<{ state: MyRoomState, input: MoveInput }> {
-  maxClients = 8;
+  maxClients = MAX_PLAYERS_PER_ROOM;
   state = new MyRoomState();
 
   /**
@@ -20,9 +21,28 @@ export class GameSelectionRoom extends Room<{ state: MyRoomState, input: MoveInp
 
   private joinCount = 0;
 
+  /** Movement arrives through the input buffer above; these are the non-input messages. */
   messages = {
-    // movement arrives through the input buffer above — register handlers here
-    // only for things that are not inputs (chat, emotes, …).
+    /** The player is (or is no longer) ready to start the selected mini-game. */
+    setReady: (client: Client, ready: unknown) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || typeof ready !== "boolean") { return; }
+      player.ready = ready;
+    },
+
+    /**
+     * Pick the mini-game to play. Everyone's ready flag resets, since they agreed to
+     * the previous game, not this one.
+     */
+    selectGame: (client: Client, id: unknown) => {
+      if (!this.state.players.has(client.sessionId) || !isMiniGameId(id)) { return; }
+      if (id === this.state.selectedMiniGame) { return; }
+
+      this.state.selectedMiniGame = id;
+      for (const player of this.state.players.values()) {
+        player.ready = false;
+      }
+    },
   };
 
   onCreate(options: any) {

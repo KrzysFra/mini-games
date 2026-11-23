@@ -1,4 +1,5 @@
 import { schema, t, type SchemaType } from "@colyseus/schema"
+import { DEFAULT_MINI_GAME } from "../../../shared/games.js";
 
 /**
  * One input frame, consumed by `Room.defineInput()`. Flat primitives only, and
@@ -18,6 +19,8 @@ export type MoveInput = SchemaType<typeof MoveInput>
 
 export const Player = schema({
   name: t.string().default("no-name"),
+  /** Ready to start the selected mini-game. */
+  ready: t.boolean().default(false),
   x: t.number(),
   y: t.number(),
   vx: t.number(),
@@ -26,8 +29,8 @@ export const Player = schema({
 export type Player = SchemaType<typeof Player>
 
 export const MyRoomState = schema({
-  selectedMiniGame: t.string().default("none"),
+  /** Id of the mini-game picked in the selection room (one of `MINI_GAMES`). */
+  selectedMiniGame: t.string().default(DEFAULT_MINI_GAME),
   players: t.map(Player),
-
 })
 export type MyRoomState = SchemaType<typeof MyRoomState>

@@ -1,10 +1,11 @@
-import { Cameras, GameObjects, Math as PMath, Scene, Time, Types } from 'phaser'
+import { Cameras, GameObjects, Math as PMath, Scene, Time } from 'phaser'
 import type { Room } from '@colyseus/sdk'
 import { NAME_MAX_LENGTH } from '../../../shared/constants'
 import { isValidPlayerName, sanitizePlayerName } from '../../../shared/player-name'
 import { client } from '../../core/network'
 import { loadPlayerName, savePlayerName } from '../../core/player-name'
-import { setCurrentRoom } from '../../core/session'
+import { hasResumableSession, leaveCurrentRoom, resumeSession, setCurrentRoom } from '../../core/session'
+import { createButton, setButtonEnabled, textStyle, titleStyle } from '../../core/ui'
 import { GameSelectionRoom } from './GameSelectionRoom'
 
 /** What the Lobby shows per room. */
@@ -39,7 +40,7 @@ const toListing = (room: ListedRoom): RoomListing => ({
 const GAME_ROOM = 'my_room'
 const NAME_SYNC_DELAY = 300
 
-type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'failed'
+type ConnectionStatus = 'resuming' | 'connecting' | 'connected' | 'reconnecting' | 'failed'
 
 const PANEL_WIDTH = 1400
 const LIST_TOP = 300
@@ -61,15 +62,8 @@ const LIST_WORLD_X = 10000
 
 const COLOR_ROW_A = 0x3d464a
 const COLOR_ROW_B = 0x353d40
-const COLOR_BUTTON = 0x3a8f5c
-const COLOR_BUTTON_HOVER = 0x47ab6f
-const COLOR_BUTTON_DISABLED = 0x5a5f61
 const COLOR_SCROLL_TRACK = 0x262b2d
 const COLOR_SCROLL_THUMB = 0x7d8f96
-
-const textStyle = (size: number, color = '#ffffff'): Types.GameObjects.Text.TextStyle => ({
-  fontFamily: 'Arial', fontSize: size, color,
-})
 
 export class Lobby extends Scene {
   rooms = new Map<string, RoomListing>()
@@ -122,12 +116,9 @@ export class Lobby extends Scene {
     this.nameBlink = undefined
     this.playerName = sanitizePlayerName(loadPlayerName())
 
-    this.add.text(width / 2, 90, 'Lobby', {
-      fontFamily: 'Arial Black', fontSize: 72, color: '#ffffff',
-      stroke: '#000000', strokeThickness: 8,
-    }).setOrigin(0.5)
+    this.add.text(width / 2, 90, 'Lobby', titleStyle).setOrigin(0.5)
 
-    this.createRoomButton = this.createButton(panelLeft + PANEL_WIDTH - 140, HEADER_Y, 280, 70, 'Create room',
+    this.createRoomButton = createButton(this, panelLeft + PANEL_WIDTH - 140, HEADER_Y, 280, 70, 'Create room',
       () => this.onCreateRoom(), this.canEnterRoom)
     this.add.existing(this.createRoomButton)
 
@@ -170,6 +161,22 @@ export class Lobby extends Scene {
     // Switching games (Ctrl+←/→) destroys the game, which doesn't emit `shutdown`
     this.events.once('shutdown', () => this.dispose())
     this.events.once('destroy', () => this.dispose())
+
+    this.start()
+  }
+
+  /** Resume the game room from before a page reload if possible, otherwise join the lobby. */
+  private async start() {
+    if (hasResumableSession()) {
+      this.setStatus('resuming')
+      const room = await resumeSession()
+      if (room) {
+        if (this.disposed) leaveCurrentRoom()
+        else this.scene.start('GameSelectionRoom')
+        return
+      }
+      if (this.disposed) return
+    }
 
     this.connect()
   }
@@ -323,7 +330,7 @@ export class Lobby extends Scene {
 
   /** Re-apply the Create / Join enabled state (name, connection or busy state changed). */
   private refreshButtons() {
-    this.setButtonEnabled(this.createRoomButton, this.canEnterRoom)
+    setButtonEnabled(this.createRoomButton, this.canEnterRoom)
     // Rows are rebuilt with the new Join state
     this.renderList()
   }
@@ -402,6 +409,7 @@ export class Lobby extends Scene {
 
     if (this.rooms.size === 0) {
       const message = {
+        resuming: 'Rejoining your room…',
         connecting: 'Connecting…',
         reconnecting: 'Connection lost, reconnecting…',
         failed: 'Cannot reach the server',
@@ -412,7 +420,7 @@ export class Lobby extends Scene {
       )
 
       if (this.status === 'failed') {
-        this.list.add(this.createButton(PANEL_WIDTH / 2, ROW_HEIGHT * 2.2, 200, 60, 'Retry', () => this.connect()))
+        this.list.add(createButton(this, PANEL_WIDTH / 2, ROW_HEIGHT * 2.2, 200, 60, 'Retry', () => this.connect()))
       }
     }
 
@@ -435,42 +443,10 @@ export class Lobby extends Scene {
     const players = this.add.text(COL_PLAYERS, midY, `${room.clients} / ${room.maxClients}`,
       textStyle(32, full ? '#d9776c' : '#ffffff')).setOrigin(0, 0.5)
     const id = this.add.text(COL_ID, midY, room.roomId, textStyle(26, '#9fb3bb')).setOrigin(0, 0.5)
-    const join = this.createButton(PANEL_WIDTH - 100, midY - 2, 160, 50, full ? 'Full' : 'Join',
+    const join = createButton(this, PANEL_WIDTH - 100, midY - 2, 160, 50, full ? 'Full' : 'Join',
       () => this.onJoinRoom(room), !full && this.canEnterRoom)
 
     return this.add.container(0, y, [bg, name, players, id, join])
-  }
-
-  /**
-   * A button container; not added to the display list, so it can go into a scene or a container.
-   * Toggle it later with `setButtonEnabled`.
-   */
-  private createButton(x: number, y: number, w: number, h: number, label: string, onClick: () => void,
-    enabled = true) {
-    const bg = new GameObjects.Rectangle(this, 0, 0, w, h, COLOR_BUTTON).setStrokeStyle(3, 0x000000)
-    const text = new GameObjects.Text(this, 0, 0, label, textStyle(Math.round(h * 0.45))).setOrigin(0.5)
-    const button = new GameObjects.Container(this, x, y, [bg, text])
-    const isEnabled = () => button.getData('enabled') === true
-
-    bg.setInteractive()
-    bg.on('pointerover', () => { if (isEnabled()) bg.setFillStyle(COLOR_BUTTON_HOVER) })
-    bg.on('pointerout', () => { if (isEnabled()) bg.setFillStyle(COLOR_BUTTON); button.setScale(1) })
-    bg.on('pointerdown', () => { if (isEnabled()) button.setScale(0.95) })
-    bg.on('pointerup', () => {
-      button.setScale(1)
-      if (isEnabled()) onClick()
-    })
-
-    this.setButtonEnabled(button, enabled)
-    return button
-  }
-
-  private setButtonEnabled(button: GameObjects.Container, enabled: boolean) {
-    const [bg, text] = button.list as [GameObjects.Rectangle, GameObjects.Text]
-    button.setData('enabled', enabled).setScale(1)
-    bg.setFillStyle(enabled ? COLOR_BUTTON : COLOR_BUTTON_DISABLED)
-    bg.input.cursor = enabled ? 'pointer' : 'default'
-    text.setAlpha(enabled ? 1 : 0.6)
   }
 }
 

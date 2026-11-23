@@ -13,3 +13,6 @@ export const PLAYER_SPEED = 260;
 /** Player names: shorter names can't create or join rooms; longer ones are cut. */
 export const NAME_MIN_LENGTH = 4;
 export const NAME_MAX_LENGTH = 20;
+
+/** Seats in a game room; the selection screen shows one player slot per seat. */
+export const MAX_PLAYERS_PER_ROOM = 8;

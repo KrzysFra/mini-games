@@ -23,13 +23,17 @@ src/server/            Colyseus server — app.config.ts (Vite serverEntry), roo
 src/client/            Phaser client — main.ts (entry, game switcher), core/ (shared client services)
 src/client/core/network.ts   the single shared Colyseus Client (same-origin endpoint)
 src/client/core/player-name.ts   player name persisted in localStorage (load/save, failure-safe)
-src/client/core/session.ts   the game room the player is in (`currentRoom`), outlives scenes
+src/client/core/ui.ts   shared menu widgets: createButton / setButtonEnabled / setButtonLabel, textStyle, titleStyle
+src/client/core/session.ts   the game room the player is in (`currentRoom`), outlives scenes; keeps its
+                             reconnection token in sessionStorage so the Lobby resumes it after a reload
 src/client/sandbox/    experiments & prototypes (examples/, pill-move/) — not real games
 src/client/game/scenes Lobby.ts (startup scene: connects to the `lobby` room, name input, live room list,
-                       create/join), GameSelectionRoom.ts (placeholder scene after entering a room);
+                       create/join), GameSelectionRoom.ts (after entering a room: leave/ready buttons, mini-game picker,
+                       8 player slots with ready state — all rendered from the room state);
                        Boot/Preloader/MainMenu/Game/GameOver are unused Phaser template scenes
 src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
-src/shared/            code used by BOTH sides: constants, player-name sanitizing, pure simulation logic
+src/shared/            code used by BOTH sides: constants, player-name sanitizing, games.ts (`MINI_GAMES`
+                       list, placeholders for now), pure simulation logic
 public/                static assets (served at /, e.g. 'assets/block.png')
 test/                  server tests; all files share one booted server via `test/server.ts`
 ```
@@ -71,6 +75,8 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   filter to `my_room`. Create/Join call `client.create('my_room')` / `joinById` with `{ name }`, then
   the Lobby leaves `lobby` and starts `GameSelectionRoom`. `MyRoom` rejects joins without a valid name
   and puts a display `title` ("<name>'s room") in its metadata — the listing's `name` is the room type.
+- Game selection room messages: `setReady` (boolean) and `selectGame` (a `MINI_GAMES` id; any player may
+  switch, and switching resets everyone's `ready`).
 - Player names: `sanitizePlayerName` / `isValidPlayerName` in `src/shared/player-name.ts`
   (`NAME_MIN_LENGTH` / `NAME_MAX_LENGTH` in `shared/constants.ts`); the server re-sanitizes everything.
 - Scenes must clean up on `destroy` as well as `shutdown`: Ctrl+←/→ destroys the whole game, which

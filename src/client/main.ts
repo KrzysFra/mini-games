@@ -1,17 +1,11 @@
 import { AUTO, Game, Scale, Types } from 'phaser'
 import { configLobby } from './game/scenes/Lobby'
-import { configCursorKeys } from './sandbox/examples/cursor-keys'
-import { configMatterConstraints } from './sandbox/examples/matter-constraints'
-import { configPillMove } from './sandbox/pill-move/scene'
 
 let currentGameIndex = 0
 let currentGame: Game = undefined
 
 const games = [
-  configLobby,
-  configPillMove,
-  configCursorKeys,
-  configMatterConstraints,
+  configLobby
 ]
 
 export const screenWidth = 1920
