@@ -1,5 +1,5 @@
 import { Room, Client, CloseCode, type StepContext } from "colyseus";
-import { MyRoomState, Player, MoveInput } from "./schema/MyRoomState.js";
+import { MyRoomState, Player, MoveInput } from "./schema/MiniGameRoomState.js";
 import { stepEntity } from "../../shared/movement.js";
 import { TICK_RATE, ARENA_WIDTH, ARENA_HEIGHT } from "../../shared/constants.js";
 
@@ -30,15 +30,6 @@ export class MyRoom extends Room<{ state: MyRoomState, input: MoveInput }> {
 
   onJoin(client: Client, options: any) {
     console.log(client.sessionId, "joined!");
-
-    // Deterministic spawn ring, so two players never start on top of each other.
-    const angle = this.joinCount++ * 2.399963;
-    this.state.players.set(client.sessionId, new Player({
-      x: ARENA_WIDTH / 2 + Math.cos(angle) * 80,
-      y: ARENA_HEIGHT / 2 + Math.sin(angle) * 80,
-      vx: 0,
-      vy: 0,
-    }));
   }
 
   onLeave(client: Client, code: CloseCode) {

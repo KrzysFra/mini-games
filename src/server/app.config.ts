@@ -11,7 +11,7 @@ import {
 /**
  * Import your Room files
  */
-import { MyRoom } from "./rooms/MyRoom.js";
+import { MyRoom } from "./rooms/MiniGameRoom.js";
 
 const server = defineServer({
 

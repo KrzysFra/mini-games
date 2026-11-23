@@ -1,4 +1,4 @@
-import { schema, t, type SchemaType } from "@colyseus/schema";
+import { schema, t, type SchemaType } from "@colyseus/schema"
 
 /**
  * One input frame, consumed by `Room.defineInput()`. Flat primitives only, and
@@ -13,20 +13,21 @@ import { schema, t, type SchemaType } from "@colyseus/schema";
 export const MoveInput = schema({
   moveX: t.int8<-1 | 0 | 1>(),
   moveY: t.int8<-1 | 0 | 1>(),
-});
-export type MoveInput = SchemaType<typeof MoveInput>;
+})
+export type MoveInput = SchemaType<typeof MoveInput>
 
 export const Player = schema({
+  name: t.string().default("no-name"),
   x: t.number(),
   y: t.number(),
   vx: t.number(),
   vy: t.number(),
-});
-export type Player = SchemaType<typeof Player>;
+})
+export type Player = SchemaType<typeof Player>
 
 export const MyRoomState = schema({
-
+  selectedMiniGame: t.string().default("none"),
   players: t.map(Player),
 
-});
-export type MyRoomState = SchemaType<typeof MyRoomState>;
+})
+export type MyRoomState = SchemaType<typeof MyRoomState>

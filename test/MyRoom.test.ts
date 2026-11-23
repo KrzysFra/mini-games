@@ -2,7 +2,7 @@ import assert from "assert";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/server/app.config.js";
-import { MyRoomState, type MoveInput } from "../src/server/rooms/schema/MyRoomState.js";
+import { MyRoomState, type MoveInput } from "../src/server/rooms/schema/MiniGameRoomState.js";
 import { PLAYER_SPEED, TICK_RATE } from "../src/shared/constants.js";
 
 describe("testing your Colyseus app", () => {

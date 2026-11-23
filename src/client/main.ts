@@ -1,4 +1,5 @@
 import { AUTO, Game, Scale, Types } from 'phaser'
+import { configLobby } from './game/scenes/Lobby'
 import { configCursorKeys } from './sandbox/examples/cursor-keys'
 import { configMatterConstraints } from './sandbox/examples/matter-constraints'
 import { configPillMove } from './sandbox/pill-move/scene'
@@ -7,6 +8,7 @@ let currentGameIndex = 0
 let currentGame: Game = undefined
 
 const games = [
+  configLobby,
   configPillMove,
   configCursorKeys,
   configMatterConstraints,
@@ -34,6 +36,9 @@ document.addEventListener('DOMContentLoaded', () => {
 })
 
 document.addEventListener('keydown', e => {
+  // Ctrl+←/→ is word navigation while typing in a text field
+  if (e.target instanceof HTMLInputElement) return
+
   if (e.code == 'ArrowRight' && e.ctrlKey) {
     currentGameIndex++
     if (currentGameIndex >= games.length) currentGameIndex = 0
