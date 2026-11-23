@@ -26,3 +26,5 @@ export default defineConfig(({ mode }) => ({
     clientReload
   ],
 }))
+
+colyseus({ serverEntry: "/src/server/app.config.ts", serveClient: true })
