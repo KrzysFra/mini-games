@@ -41,8 +41,16 @@ export const CAR_WIDTH = 20;
 /** Car-vs-car / car-vs-wall bounce. */
 export const CAR_RESTITUTION = 0.3;
 
-/** Top forward speed, per step (the destruction front's speed is derived from it). */
-export const CAR_MAX_SPEED = 14;
+/**
+ * The game's speed: how far the destruction front, and with it the camera, moves along the road
+ * per minute. Cars' top speed is derived from it (`CAR_MAX_SPEED`).
+ */
+export const CAMERA_SPEED_PER_MINUTE = 50000;
+/** The destruction front's speed as a share of a car's top speed, so cars can pull away from it. */
+export const DESTRUCTION_SPEED_FACTOR = 0.95;
+/** Top forward speed, per step: the front's speed (`CAMERA_SPEED_PER_MINUTE`) / `DESTRUCTION_SPEED_FACTOR`. */
+export const CAR_MAX_SPEED =
+  CAMERA_SPEED_PER_MINUTE / (60000 / PHYSICS_STEP_MS) / DESTRUCTION_SPEED_FACTOR;
 /**
  * Ticks (`TICK_RATE`) of countdown at the start of a round: the running start. Every car drives
  * straight north up the first straight at top speed, out of the players' control, and the

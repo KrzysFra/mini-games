@@ -52,27 +52,33 @@ export type ObstacleKind = keyof typeof OBSTACLE_KINDS;
 const KIND_LIST = Object.keys(OBSTACLE_KINDS) as ObstacleKind[];
 
 /**
- * How often each kind spawns, by distance along the road from its start: each entry applies from
- * its distance on (instantly), until the next one's. A weight is that kind's spawn rate, in units
+ * How often each kind spawns, by distance along the road from its start: a list of
+ * `[distance, weights]`, where `distance` is relative, from the previous entry's start (the first
+ * one's from the road's start). Each entry applies from its start on (instantly), until the next
+ * one's; the last one for good. A weight is that kind's spawn rate, in units
  * of `OBSTACLE_CHANCE` per segment: `{ brown: 1 }` spawns as many cars as `OBSTACLE_CHANCE`,
  * `{ brown: 2 }` twice that, `{ brown: 0.75, red: 0.75 }` 1.5 times that, half of each. A kind
  * left out of an entry doesn't spawn there. The lowest entry also applies before its distance.
  * (At most one obstacle per segment: totals above 1 / `OBSTACLE_CHANCE` spawn no more.)
  * camera move: 48k per minute
  */
-export const OBSTACLE_WEIGHTS: Record<number, Partial<Record<ObstacleKind, number>>> = {
-  0: { brown: 1 },
-  // 0: { brown: 1, black: .2 },
-  24000: { brown: 2 },
-  48000: { brown: 1, red: .3 },
-  62000: { orange: 2 },
-  66800: { brown: 1, black: .2 },
-};
+export const OBSTACLE_WEIGHTS: [number, Partial<Record<ObstacleKind, number>>][] = [
+  [0, { brown: 1 }],
+  [25000, { brown: 2 }],
+  [25000, { brown: .2, red: 1 }],
+  [25000, { orange: 2 }],
+  [10000, { brown: 1, black: .2 }],
+  [25000, { brown: 1, black: .4 }],
+  [25000, { brown: 1, black: .6 }],
+  [25000, { brown: 1, black: .8 }],
+  [25000, { brown: 1, black: 1 }],
+];
 
-/** `OBSTACLE_WEIGHTS`' entries by increasing distance. */
-const WEIGHT_STEPS = Object.entries(OBSTACLE_WEIGHTS)
-  .map(([distance, weights]) => ({ distance: Number(distance), weights }))
-  .sort((a, b) => a.distance - b.distance);
+/** `OBSTACLE_WEIGHTS`' entries at their absolute distance along the road (increasing). */
+const WEIGHT_STEPS = (() => {
+  let distance = 0;
+  return OBSTACLE_WEIGHTS.map(([offset, weights]) => ({ distance: distance += Math.max(0, offset), weights }));
+})();
 
 /** A kind's weight (`OBSTACLE_WEIGHTS`) for an obstacle spawning `distance` along the road. */
 export function obstacleWeight(kind: ObstacleKind, distance: number): number {

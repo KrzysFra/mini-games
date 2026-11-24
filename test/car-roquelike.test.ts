@@ -70,7 +70,8 @@ describe("car-roquelike room", () => {
     assert.ok(room.state.carRoundTick < COUNTDOWN_TICKS, "still counting down");
     assert.strictEqual(car.x, startX, "straight");
     assert.ok(car.y < startY - 10 * CAR_MAX_SPEED, `drove north (from ${startY} to ${car.y})`);
-    assert.deepStrictEqual([car.vx, car.vy, car.angle], [0, -CAR_MAX_SPEED, -Math.PI / 2], "at top speed");
+    assert.deepStrictEqual([car.vx, car.angle], [0, -Math.PI / 2], "north");
+    assert.ok(Math.abs(car.vy + CAR_MAX_SPEED) < 1e-9, `at top speed (${car.vy})`);
   });
 
   it("eliminates cars caught by the destruction, and restarts once everyone is out", async () => {

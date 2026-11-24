@@ -1,4 +1,4 @@
-import { CAR_MAX_SPEED, COUNTDOWN_TICKS, PHYSICS_SUBSTEPS } from "./constants.js";
+import { CAR_MAX_SPEED, COUNTDOWN_TICKS, DESTRUCTION_SPEED_FACTOR, PHYSICS_SUBSTEPS } from "./constants.js";
 import { chunkOwnerS, roadTail, type Road } from "./road.js";
 
 /**
@@ -25,8 +25,11 @@ import { chunkOwnerS, roadTail, type Road } from "./road.js";
  */
 
 export { COUNTDOWN_TICKS };
-/** How far the front moves along the road per physics step: 95% of a car's top speed. */
-export const DESTRUCTION_SPEED = 0.95 * CAR_MAX_SPEED;
+/**
+ * How far the front moves along the road per physics step: `DESTRUCTION_SPEED_FACTOR` of a car's
+ * top speed, i.e. `CAMERA_SPEED_PER_MINUTE` per minute.
+ */
+export const DESTRUCTION_SPEED = DESTRUCTION_SPEED_FACTOR * CAR_MAX_SPEED;
 
 export const CHUNK_SIZE = 40;
 /** How far ahead of the front a chunk can break (the raggedness of the edge). */

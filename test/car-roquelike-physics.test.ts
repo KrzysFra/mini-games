@@ -320,7 +320,8 @@ describe("car-roquelike physics", () => {
       const world = createCarWorld();
       const a = addCar(world, "a", 0);
       const b = addCar(world, "b", 5);
-      assert.deepStrictEqual([a.velocity.x, a.velocity.y], [0, -CAR_MAX_SPEED], "already driving when spawned");
+      assert.strictEqual(a.velocity.x, 0, "already driving when spawned: north");
+      assert.ok(Math.abs(a.velocity.y + CAR_MAX_SPEED) < 1e-9, `already driving when spawned (${a.velocity.y})`);
       const inputs = new Map([["a", direction(0)], ["b", direction(180)]]);
       for (let tick = 0; tick < COUNTDOWN_TICKS; tick++) {
         const eliminated = stepCarRound(world, inputs, tick, PHYSICS_SUBSTEPS, PHYSICS_STEP_MS);
@@ -339,7 +340,8 @@ describe("car-roquelike physics", () => {
         assert.strictEqual(car.position.x, spawn.x, "straight");
         assert.ok(Math.abs(car.position.y - (spawn.y - RUNNING_START_DISTANCE)) < 1e-6, `up by the running start (${car.position.y})`);
         assert.strictEqual(car.angle, -Math.PI / 2);
-        assert.deepStrictEqual([car.velocity.x, car.velocity.y], [0, -CAR_MAX_SPEED], "at top speed");
+        assert.strictEqual(car.velocity.x, 0, "at top speed: north");
+        assert.ok(Math.abs(car.velocity.y + CAR_MAX_SPEED) < 1e-9, `at top speed (${car.velocity.y})`);
         assert.ok(isOnRoad(world.road, car.position.x, car.position.y, destructionFrontS(COUNTDOWN_TICKS)), "on the road");
       }
 
