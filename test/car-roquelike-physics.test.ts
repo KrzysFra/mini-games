@@ -4,6 +4,7 @@ import {
   CAR_LENGTH, CAR_MAX_SPEED, DIRT_SPEED_FACTOR, PHYSICS_STEP_MS, PHYSICS_SUBSTEPS, ROAD_WIDTH,
 } from "../src/shared/games/car-roquelike/constants.js";
 import { SPAWN_POINTS } from "../src/shared/games/car-roquelike/map.js";
+import { cameraCenter, isOutOfView, VIEW_HALF_HEIGHT, VIEW_HALF_WIDTH } from "../src/shared/games/car-roquelike/camera.js";
 import {
   CHUNK_JITTER, COUNTDOWN_TICKS, DESTRUCTION_SPEED, destructionFrontS, isDestroyed,
 } from "../src/shared/games/car-roquelike/destruction.js";
@@ -241,6 +242,23 @@ describe("car-roquelike physics", () => {
       }
       assert.deepStrictEqual(eliminated, ["a"]);
       assert.ok(isDestroyed(world.road, startX, startY, destructionFrontS(tick)), "the front had reached the parked car");
+    });
+
+    it("eliminates (removes) a car whose center leaves the camera's view", () => {
+      const world = createCarWorld();
+      const frontS = destructionFrontS(COUNTDOWN_TICKS + 1);
+      const center = cameraCenter(world.road, frontS);
+      // Beside the first straight, on intact dirt: just inside the view's left edge, and just outside
+      const inside = addCar(world, "in", 0);
+      writeCar(inside, { x: center.x - VIEW_HALF_WIDTH + 50, y: center.y, angle: 0, vx: 0, vy: 0, av: 0 });
+      const outside = addCar(world, "out", 1);
+      writeCar(outside, { x: center.x - VIEW_HALF_WIDTH - 50, y: center.y, angle: 0, vx: 0, vy: 0, av: 0 });
+      assert.ok(!isDestroyed(world.road, outside.position.x, outside.position.y, frontS), "not in the void");
+
+      const eliminated = stepCarRound(world, new Map(), COUNTDOWN_TICKS, PHYSICS_SUBSTEPS, PHYSICS_STEP_MS);
+      assert.deepStrictEqual(eliminated, ["out"]);
+      assert.ok(world.cars.has("in") && !world.cars.has("out"));
+      assert.ok(isOutOfView(world.road, center.x, center.y - VIEW_HALF_HEIGHT - 1, frontS), "above the view too");
     });
   });
 

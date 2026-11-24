@@ -9,7 +9,7 @@ import {
   addCar, createCarWorld, destroyCarWorld, maintainRoad, removeCar, stepCarRound, useRoadSeed, writeCar,
   type CarSnapshot, type CarWorld,
 } from '@shared/games/car-roquelike/physics'
-import { roadPointAt } from '@shared/games/car-roquelike/road'
+import { CAMERA_ZOOM, cameraCenter } from '@shared/games/car-roquelike/camera'
 import { SANDBOX_GAME, SANDBOX_ROOM } from '@core/sandbox'
 import { textStyle } from '@core/ui'
 import { MiniGameParent } from '../MiniGameScene'
@@ -67,20 +67,13 @@ const COLOR_OWN_OUTLINE = 0xffffff
 const COLOR_BLOCK = 0x5b6169
 /** Teleports beyond this (a round restart) are cut instead of smoothed. */
 const SNAP_DISTANCE = 500
-/** The camera (the same for everyone) is on the road this far ahead of the destruction front. */
-const CAMERA_AHEAD_OF_FRONT = 1000
-/**
- * Fixed zoom. At 0.45 the view reaches 1200 above its center, so the spawn grid (1000..1100 up
- * the road from the camera during the countdown) is on screen at the start.
- */
-const CAMERA_ZOOM = 0.45
 
 /**
  * car-roquelike: every player drives a car top-down along a randomly generated road (`road.ts`,
  * a new one each round, from `roadSeed`) surrounded by endless dirt (which halves top speed); cars
  * collide with each other. After a countdown the world collapses into the void from the road's
- * start, moving along the road at 95% of top speed (`destruction.ts`); a car caught by it is
- * eliminated, and once everyone is, the round restarts.
+ * start, moving along the road at 95% of top speed (`destruction.ts`); a car caught by it, or
+ * leaving the shared camera's view (`camera.ts`), is eliminated, and once everyone is, the round restarts.
  *
  * The ground is drawn by `RoadView` (dirt, road pieces culled to the view) and `DestructionView`
  * (the void and its crumbling edge, derived from the front).
@@ -397,10 +390,10 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
    * The same view for every player: north-up, fixed zoom, centered on the road
    * `CAMERA_AHEAD_OF_FRONT` ahead of the destruction front (at the predicted time the front is
    * drawn at, so it moves smoothly; through corners it follows the road). A new round's road
-   * starts it back at the beginning.
+   * starts it back at the beginning. A car whose center leaves it is eliminated (`camera.ts`).
    */
   private updateCamera(frontS: number) {
-    const point = roadPointAt(this.carWorld.road, frontS + CAMERA_AHEAD_OF_FRONT, this.cameraPoint)
+    const point = cameraCenter(this.carWorld.road, frontS, this.cameraPoint)
     this.cameras.main.centerOn(point.x, point.y)
   }
 

@@ -158,14 +158,16 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `DESTRUCTION_SPEED`: a chunk is void once the front passes its owner's distance along the road (dirt
   goes with the stretch of road beside it), and restored once its owner is deleted, so the void is a
   band following the front. The front edge is ragged: per-`CHUNK_SIZE`-chunk break points
-  (`chunkBreakS`, integer-hash noise). A car whose center is over a void chunk is eliminated
-  (`stepCarRound` removes its body; `Car.eliminated`). When every car is out, the sim restarts the round
+  (`chunkBreakS`, integer-hash noise). A car whose center is over a void chunk, or outside the shared
+  camera's view (`isOutOfView`, `camera.ts`), is eliminated (`stepCarRound` removes its body; `Car.eliminated`). When every car is out, the sim restarts the round
   (`carRound++`, new road, cars back at their spawns). Eliminated players' inputs are still consumed so
   their acks advance. The client predicts the round tick with its inputs (in the sim world, adopted from
   `carRoundTick`), draws the front at that predicted time (fallen chunks as merged void runs,
   cracking/falling chunks at the edge).
   Room tests skip the countdown by setting `state.carRoundTick`. The scene enables gamepads itself via
-  `input: { gamepad: true }` in its settings (missing from Phaser 4's `SettingsConfig` type, so it's widened). Camera: the same for everyone, north-up, fixed zoom (`CAMERA_ZOOM`), centered on the road `CAMERA_AHEAD_OF_FRONT` (500) ahead of the predicted front (`roadPointAt`);
+  `input: { gamepad: true }` in its settings (missing from Phaser 4's `SettingsConfig` type, so it's widened). Camera: the same for everyone, north-up, fixed zoom (`CAMERA_ZOOM`), centered on the road `CAMERA_AHEAD_OF_FRONT` (1000) ahead of the predicted front
+  (`cameraCenter`); its geometry is shared (`shared/games/car-roquelike/camera.ts`, `SCREEN_WIDTH/HEIGHT` = the
+  1920×1080 logical screen) so the server eliminates cars off it;
   the HUD is on a second camera (world and HUD in separate layers, each camera ignores the other).
   Velocities are matter units (px per 1000/60 ms), which is also the physics step.
   Physics tests: `car-roquelike-physics.test.ts` (controls, road, destruction, rounds) and
@@ -181,7 +183,8 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   the car scene keeps `SANDBOX_CPU_PLAYERS` (2) of them in the room. Each is an extra connection from
   that tab (`client.joinById(roomId, { cpu: true })`) that sends `GameInput` through `room.input()` at
   `TICK_RATE`, steering from its own copy of the state, so it gets the same network path and latency as a
-  player. The server names them "CPU N", sets `Player.cpu`, caps them (another tab tops up when the host
+  player. They aim at a point clamped inside the camera's view (less `VIEW_MARGIN`) and ease off the
+  throttle near its edge (`stayInView`). The server names them "CPU N", sets `Player.cpu`, caps them (another tab tops up when the host
   tab leaves), holds no seat when one drops, and ignores them for "everyone escaped". The room is only registered when
   `NODE_ENV !== "production"`, and the client ignores `VITE_SANDBOX` outside `import.meta.env.DEV`.
 - Player names: `sanitizePlayerName` / `isValidPlayerName` in `src/shared/player-name.ts`

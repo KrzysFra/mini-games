@@ -1,7 +1,8 @@
 import type { InputHandle, Room } from '@colyseus/sdk'
 import { MAX_PLAYERS_PER_ROOM, SANDBOX_CPU_PLAYERS, TICK_RATE } from '@shared/constants'
 import { destructionFrontS } from '@shared/games/car-roquelike/destruction'
-import { getRoad, roadDistanceAt, roadPointAt } from '@shared/games/car-roquelike/road'
+import { cameraCenter, VIEW_HALF_HEIGHT, VIEW_HALF_WIDTH } from '@shared/games/car-roquelike/camera'
+import { getRoad, roadDistanceAt, roadPointAt, type Road } from '@shared/games/car-roquelike/road'
 import type { GameInputLike } from '@shared/games/car-roquelike/controls'
 import { client } from '@core/network'
 
@@ -42,6 +43,10 @@ const WEAVE_AMPLITUDE = 60
 const WEAVE_RATE = 0.04
 /** Cars ahead within this distance get rammed (by `aggression`). */
 const RAM_RANGE = 350
+/** How far inside the camera's view CPUs keep (it reacts to state that's a little old). */
+const VIEW_MARGIN = 350
+/** The least throttle a CPU drops to near the view's edge (it still needs some to steer). */
+const MIN_EDGE_THROTTLE = 0.3
 /** How often a tab checks whether the room is short of CPU drivers. */
 const TOP_UP_INTERVAL_MS = 1000
 const STEP_MS = 1000 / TICK_RATE
@@ -49,6 +54,8 @@ const STEP_MS = 1000 / TICK_RATE
 const MAX_STEPS_PER_FRAME = 4
 
 const roadPoint = { x: 0, y: 0, heading: 0, s: 0 }
+const cameraPoint = { x: 0, y: 0, heading: 0, s: 0 }
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
 
 /** One CPU driver: its own connection to the room, sending one input per tick like a player. */
 class CpuDriver {
@@ -60,7 +67,8 @@ class CpuDriver {
 
   /**
    * Stage the input from what this connection last received of the room (so it reacts with the same
-   * delay a player's view has): follow the road, and swerve at a car close ahead if aggressive.
+   * delay a player's view has): follow the road, swerve at a car close ahead if aggressive, and
+   * stay inside the camera's view.
    */
   stage() {
     const data = this.input.data
@@ -99,8 +107,29 @@ class CpuDriver {
       dy /= length
     }
 
-    data.x = dx
-    data.y = dy
+    this.stayInView(road, frontS, car, dx, dy, LOOKAHEAD_BASE + speed * LOOKAHEAD_PER_SPEED)
+  }
+
+  /**
+   * Leaving the camera's view eliminates a car, so drive toward a point inside it: where it wants
+   * to go (`dirX`, `dirY`, `reach` ahead), pulled into the view less `VIEW_MARGIN`. The throttle
+   * eases off by how much of that reach the view leaves, so a car racing the front's leading edge
+   * slows down instead of running off the screen.
+   */
+  private stayInView(road: Road, frontS: number, car: CpuCarView, dirX: number, dirY: number, reach: number) {
+    const center = cameraCenter(road, frontS, cameraPoint)
+    const halfW = VIEW_HALF_WIDTH - VIEW_MARGIN
+    const halfH = VIEW_HALF_HEIGHT - VIEW_MARGIN
+    const aimX = clamp(car.x + dirX * reach, center.x - halfW, center.x + halfW)
+    const aimY = clamp(car.y + dirY * reach, center.y - halfH, center.y + halfH)
+    const toX = aimX - car.x
+    const toY = aimY - car.y
+    const dist = Math.hypot(toX, toY)
+    // Right at the edge the aim is on the car itself: keep the heading, just slow down
+    const throttle = clamp(dist / reach, MIN_EDGE_THROTTLE, 1)
+    const data = this.input.data
+    data.x = (dist > 1 ? toX / dist : dirX) * throttle
+    data.y = (dist > 1 ? toY / dist : dirY) * throttle
   }
 
   /** The nearest other car within `RAM_RANGE` roughly in the direction we're heading. */

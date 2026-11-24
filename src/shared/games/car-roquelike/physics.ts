@@ -1,4 +1,5 @@
 import Matter from "matter-js";
+import { isOutOfView } from "./camera.js";
 import { CAR_LENGTH, CAR_MAX_SPEED, CAR_RESTITUTION, CAR_WIDTH, DIRT_SPEED_FACTOR } from "./constants.js";
 import { resolveCarControls, type CarControls, type CarInput } from "./controls.js";
 import { COUNTDOWN_TICKS, destructionFrontS, isDestroyed } from "./destruction.js";
@@ -112,7 +113,8 @@ export function stepCarWorld(
 /**
  * Advance a round by one input tick, the round having already run `roundTick` ticks. During the
  * countdown nothing moves. After it, the world steps (`stepCarWorld`) and every car now over
- * destroyed ground is removed from the world; their ids are returned (in `eliminated`, reused).
+ * destroyed ground, or with its center off the camera's view (`isOutOfView`), is removed from the
+ * world; their ids are returned (in `eliminated`, reused).
  */
 export function stepCarRound(
   world: CarWorld,
@@ -129,7 +131,8 @@ export function stepCarRound(
   stepCarWorld(world, inputs, subSteps, subDtMs);
   const frontS = destructionFrontS(roundTick + 1);
   for (const [id, body] of world.cars) {
-    if (isDestroyed(world.road, body.position.x, body.position.y, frontS)) eliminated.push(id);
+    const { x, y } = body.position;
+    if (isDestroyed(world.road, x, y, frontS) || isOutOfView(world.road, x, y, frontS)) eliminated.push(id);
   }
   for (const id of eliminated) removeCar(world, id);
   return eliminated;
