@@ -4,7 +4,7 @@ import Matter from "matter-js";
 import {
   CAR_LENGTH, CAR_MAX_SPEED, CAR_WIDTH, DIRT_SPEED_FACTOR, PHYSICS_STEP_MS, PHYSICS_SUBSTEPS, ROAD_WIDTH, RUNNING_START_DISTANCE,
 } from "../src/shared/games/car-roquelike/constants.js";
-import { SPAWN_POINTS, SPAWN_STAGGER_MAX, SPAWN_STAGGER_MIN, spawnPoint } from "../src/shared/games/car-roquelike/map.js";
+import { SPAWN_POINTS, SPAWN_STAGGER_MAX, SPAWN_STAGGER_MIN, spawnPoint, spawnSlot } from "../src/shared/games/car-roquelike/map.js";
 import { cameraCenter, isOutOfView, VIEW_HALF_HEIGHT, VIEW_HALF_WIDTH } from "../src/shared/games/car-roquelike/camera.js";
 import {
   CHUNK_JITTER, COUNTDOWN_TICKS, DESTRUCTION_SPEED, destructionFrontS, isDestroyed,
@@ -332,7 +332,8 @@ describe("car-roquelike physics", () => {
       const seed = world.road.seed;
       const gapStart = -spawnPoint(0, seed).y;
       const gapEnd = -a.position.y - destructionFrontS(COUNTDOWN_TICKS);
-      assert.ok(gapStart <= CHUNK_JITTER + 150 + SPAWN_STAGGER_MAX && gapEnd > gapStart + 150, `pulls away from the front (${gapStart} → ${gapEnd})`);
+      // Seat 0 may start in either row (the grid is shuffled per round); the rows are 100 apart
+      assert.ok(gapStart <= CHUNK_JITTER + 150 + 100 + SPAWN_STAGGER_MAX && gapEnd > gapStart + 150, `pulls away from the front (${gapStart} → ${gapEnd})`);
       for (const [car, seat] of [[a, 0], [b, 5]] as const) {
         const spawn = spawnPoint(seat, seed);
         assert.strictEqual(car.position.x, spawn.x, "straight");
@@ -402,11 +403,21 @@ describe("car-roquelike physics", () => {
       }
     });
 
+    it("shuffles the seats over the spawn slots per round", () => {
+      const orders = new Set<string>();
+      for (let seed = 1; seed <= 20; seed++) {
+        const slots = SPAWN_POINTS.map((_, seat) => spawnSlot(seat, seed));
+        assert.deepStrictEqual([...slots].sort(), SPAWN_POINTS.map((_, i) => i), "every seat gets its own slot");
+        orders.add(slots.join());
+      }
+      assert.ok(orders.size > 15, `the grid order changes between rounds (${orders.size} of 20 differ)`);
+    });
+
     it("staggers the spawns by 1..2 car lengths per round, without overlapping", () => {
       for (const seed of [1, 2, 3, 12345, 0xdeadbeef]) {
         const spawns = SPAWN_POINTS.map((_, seat) => spawnPoint(seat, seed));
         spawns.forEach((spawn, seat) => {
-          const stagger = SPAWN_POINTS[seat].y - spawn.y;
+          const stagger = SPAWN_POINTS[spawnSlot(seat, seed)].y - spawn.y;
           assert.ok(stagger >= SPAWN_STAGGER_MIN && stagger <= SPAWN_STAGGER_MAX, `seat ${seat} staggered ${stagger}`);
           assert.deepStrictEqual(spawnPoint(seat, seed), spawn, "the same for every side");
           for (const other of spawns.slice(seat + 1)) {
@@ -414,7 +425,8 @@ describe("car-roquelike physics", () => {
             assert.ok(apart, `seat ${seat} clear of the others`);
           }
         });
-        assert.ok(new Set(spawns.slice(0, 4).map((s) => s.y)).size > 1, "the front row isn't lined up");
+        const frontRow = spawns.filter((_, seat) => spawnSlot(seat, seed) < 4);
+        assert.ok(new Set(frontRow.map((s) => s.y)).size > 1, "the front row isn't lined up");
       }
     });
 

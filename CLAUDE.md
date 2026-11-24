@@ -164,14 +164,19 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   Rounds: `state.carRoundTick` counts ticks; the first `COUNTDOWN_TICKS` are a countdown, the running start: inputs are ignored and every car drives
   straight north from its spawn at `CAR_MAX_SPEED` (`runningStartPose(seat, seed, tick)`, written directly, no
   physics or elimination; cars spawn already at that speed; `CarWorld.seats` maps ids to seats). The
-  back row's base slots are `CHUNK_JITTER` + 150 up the road, just ahead of the void's edge; each round every slot moves up
-  a further 1..2 car lengths (`spawnPoint(seat, roadSeed)`, hashed, so not lined up). The destruction front
+  back row's base slots are `CHUNK_JITTER` + 150 up the road, just ahead of the void's edge; each round the seats are
+  shuffled over the slots (`spawnSlot(seat, roadSeed)`, hashed, so a random grid position per race) and every slot moves up
+  a further `SPAWN_STAGGER_MIN..MAX` (`spawnPoint(seat, roadSeed)`, hashed, so not lined up). The destruction front
   (`destruction.ts`) moves along the road from its start at `DESTRUCTION_SPEED` from tick 0 (countdown
   included), so the cars slowly pull away from it during the countdown: a chunk is void once the front passes its owner's distance along the road (dirt
   goes with the stretch of road beside it), and restored once its owner is deleted, so the void is a
   band following the front. The front edge is ragged: per-`CHUNK_SIZE`-chunk break points
   (`chunkBreakS`, integer-hash noise). A car whose center is over a void chunk, or outside the shared
-  camera's view (`isOutOfView`, `camera.ts`), is eliminated (`stepCarRound` removes its body; `Car.eliminated`). When every car is out, the sim restarts the round
+  camera's view (`isOutOfView`, `camera.ts`), is eliminated (`stepCarRound` removes its body; `Car.eliminated`). Round end (`checkRoundEnd`): once
+  one car is left in a round that has had 2+ cars (a leaver counts as out), it wins (`carWinner`,
+  `carWinnerName`, `carWinTick`); the round runs on, clients show "<name> has won!!" for `WIN_TEXT_TICKS`,
+  then fade the world to black (`WIN_FADE_TICKS`, timed by the server's `carRoundTick`), and the sim
+  restarts. When every car is out with no winner (all at once, or alone), it restarts right away
   (`carRound++`, new road, cars back at their spawns). Eliminated players' inputs are still consumed so
   their acks advance. The client predicts the round tick with its inputs (in the sim world, adopted from
   `carRoundTick`), draws the front at that predicted time (fallen chunks as merged void runs,

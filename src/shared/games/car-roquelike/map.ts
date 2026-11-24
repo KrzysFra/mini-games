@@ -45,17 +45,42 @@ export const SPAWN_POINTS: readonly SpawnPoint[] = Array.from({ length: 8 }, (_,
 
 /** Each round every slot moves up the road by a random 1..2 car lengths (the rows, 100 apart, stay apart). */
 export const SPAWN_STAGGER_MIN = CAR_LENGTH;
-export const SPAWN_STAGGER_MAX = 2 * CAR_LENGTH;
+export const SPAWN_STAGGER_MAX = 3 * CAR_LENGTH;
+
+/** The last seed's seat → slot shuffle (`spawnSlot` runs per car per tick in the running start). */
+let shuffledSeed: number | undefined;
+const shuffledSlots: number[] = [];
 
 /**
- * A seat's spawn point in the round with road seed `seed`: its `SPAWN_POINTS` slot moved up the
- * road (north) by `SPAWN_STAGGER_MIN..MAX`, from a hash of (seat, seed), so the grid isn't lined
- * up and every side agrees on it.
+ * The `SPAWN_POINTS` slot a seat starts from in the round with road seed `seed`: the seats are
+ * shuffled over the slots per round (Fisher–Yates from a hash of the seed), so every race starts
+ * from a random grid position and every side agrees on it.
+ */
+export function spawnSlot(seat: number, seed: number): number {
+  if (shuffledSeed !== seed) {
+    shuffledSlots.length = 0;
+    for (let i = 0; i < SPAWN_POINTS.length; i++) shuffledSlots.push(i);
+    for (let i = shuffledSlots.length - 1; i > 0; i--) {
+      const j = Math.floor(chunkHash(i, seed, 31) * (i + 1));
+      const swap = shuffledSlots[i];
+      shuffledSlots[i] = shuffledSlots[j];
+      shuffledSlots[j] = swap;
+    }
+    shuffledSeed = seed;
+  }
+  return shuffledSlots[seat % SPAWN_POINTS.length];
+}
+
+/**
+ * A seat's spawn point in the round with road seed `seed`: its slot (`spawnSlot`, shuffled per
+ * round) moved up the road (north) by `SPAWN_STAGGER_MIN..MAX`, from a hash of (slot, seed), so
+ * the grid isn't lined up and every side agrees on it.
  */
 export function spawnPoint(seat: number, seed: number, out: SpawnPoint = { x: 0, y: 0, angle: 0 }): SpawnPoint {
-  const base = SPAWN_POINTS[seat % SPAWN_POINTS.length];
+  const slot = spawnSlot(seat, seed);
+  const base = SPAWN_POINTS[slot];
   // Whole units: exact in the float32 state
-  const stagger = Math.round(SPAWN_STAGGER_MIN + chunkHash(seat, seed, 30) * (SPAWN_STAGGER_MAX - SPAWN_STAGGER_MIN));
+  const stagger = Math.round(SPAWN_STAGGER_MIN + chunkHash(slot, seed, 30) * (SPAWN_STAGGER_MAX - SPAWN_STAGGER_MIN));
   out.x = base.x;
   out.y = base.y - stagger;
   out.angle = base.angle;

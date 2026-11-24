@@ -7,6 +7,7 @@ import {
 } from "../../../shared/games/car-roquelike/physics.js";
 import { destructionFrontS } from "../../../shared/games/car-roquelike/destruction.js";
 import { buildRoad } from "../../../shared/games/car-roquelike/road.js";
+import { WIN_FADE_TICKS, WIN_TEXT_TICKS } from "../../../shared/games/car-roquelike/constants.js";
 import {
   Car, ObstacleCar, type GameInput, type GameSelectionRoomState,
 } from "../../rooms/schema/MiniGameRoomState.js";
@@ -16,16 +17,19 @@ import type { ServerMiniGame } from "../types.js";
  * car-roquelike on the server: the authoritative matter world with one car per player.
  * Every tick it applies one input per player, steps the shared round (countdown, physics,
  * destruction front), and writes each car's state to `state.cars` (which clients adopt for
- * prediction). Cars caught by the front are eliminated; once every car is, the round restarts.
+ * prediction). Cars caught by the front are eliminated; the last one left wins (`checkRoundEnd`), then the round restarts.
  */
 export class CarRoquelikeSim implements ServerMiniGame {
   private world: CarWorld = createCarWorld();
   private inputs = new Map<string, CarInput>();
   private eliminated: string[] = [];
+  /** The most cars this round has had: a winner is only declared in a round of two or more. */
+  private roundCars = 0;
 
   constructor(private state: GameSelectionRoomState) {
     state.carRound = 0;
     state.carRoundTick = 0;
+    this.clearWinner();
     this.newRoad();
     for (const sessionId of state.players.keys()) {
       this.addPlayer(sessionId);
@@ -39,13 +43,14 @@ export class CarRoquelikeSim implements ServerMiniGame {
     // Joining during the running start: alongside the others (later, where they took over)
     const body = addCar(this.world, sessionId, seat, runningStartPose(seat, this.state.roadSeed, this.state.carRoundTick));
     this.state.cars.set(sessionId, new Car({ ...readCar(body), inX: 0, inY: 0, inButtons: 0, seat }));
+    this.roundCars = Math.max(this.roundCars, this.state.cars.size);
   }
 
   removePlayer(sessionId: string) {
     removeCar(this.world, sessionId);
     this.inputs.delete(sessionId);
     this.state.cars.delete(sessionId);
-    this.restartIfAllEliminated();
+    this.checkRoundEnd();
   }
 
   step(ctx: StepContext, inputs: InputAPI<GameInput>) {
@@ -84,7 +89,7 @@ export class CarRoquelikeSim implements ServerMiniGame {
     }
     this.syncObstacles();
 
-    this.restartIfAllEliminated();
+    this.checkRoundEnd();
   }
 
   /** Mirror the world's obstacles into `state.obstacles` (spawned, moved, gone). */
@@ -124,16 +129,42 @@ export class CarRoquelikeSim implements ServerMiniGame {
     this.state.obstacles.clear();
     this.state.carRound = 0;
     this.state.carRoundTick = 0;
+    this.clearWinner();
   }
 
-  /** Everyone is out: start a new round (countdown again), every car back at its seat's spawn. */
-  private restartIfAllEliminated() {
+  /**
+   * The end of a round. Once only one car is left in a round that had two or more, it has won:
+   * the round runs on through the win text and the fade (`WIN_TEXT_TICKS` + `WIN_FADE_TICKS`),
+   * then restarts. If everyone is out with no winner (all out at once, or playing alone), it
+   * restarts right away.
+   */
+  private checkRoundEnd() {
     if (this.state.cars.size === 0) { return; }
-    for (const car of this.state.cars.values()) {
-      if (!car.eliminated) { return; }
+    const { state } = this;
+
+    if (state.carWinner !== "") {
+      if (state.carRoundTick >= state.carWinTick + WIN_TEXT_TICKS + WIN_FADE_TICKS) { this.restartRound(); }
+      return;
     }
 
+    const left: string[] = [];
+    for (const [sessionId, car] of state.cars) {
+      if (!car.eliminated) { left.push(sessionId); }
+    }
+    if (left.length === 0) {
+      this.restartRound();
+    } else if (left.length === 1 && this.roundCars >= 2) {
+      state.carWinner = left[0];
+      state.carWinnerName = state.players.get(left[0])?.name ?? "";
+      state.carWinTick = state.carRoundTick;
+    }
+  }
+
+  /** Start a new round (countdown again), every car back at its seat's spawn. */
+  private restartRound() {
     this.inputs.clear();
+    this.clearWinner();
+    this.roundCars = this.state.cars.size;
     // The new road first: its seed staggers the spawns
     this.newRoad();
     for (const [sessionId, car] of this.state.cars) {
@@ -142,6 +173,12 @@ export class CarRoquelikeSim implements ServerMiniGame {
     }
     this.state.carRoundTick = 0;
     this.state.carRound++;
+  }
+
+  private clearWinner() {
+    this.state.carWinner = "";
+    this.state.carWinnerName = "";
+    this.state.carWinTick = 0;
   }
 
   /** A fresh random road for the round (clients build the same one from `roadSeed`). */

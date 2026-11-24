@@ -92,6 +92,14 @@ export const GameSelectionRoomState = schema({
   carRound: t.uint16().default(0),
   /** car-roquelike: ticks this round has run (countdown included); drives the destruction front. */
   carRoundTick: t.uint32().default(0),
+  /**
+   * car-roquelike: the last car left in a round that had two or more (sessionId; "" = none yet).
+   * Its name is copied (the winner may leave); the round tick it won at times the win text and
+   * the fade into the next round (`WIN_TEXT_TICKS`, `WIN_FADE_TICKS`).
+   */
+  carWinner: t.string().default(""),
+  carWinnerName: t.string().default(""),
+  carWinTick: t.uint32().default(0),
   /** car-roquelike: seed of this round's road (`getRoad`); everyone builds the same road from it. */
   roadSeed: t.uint32().default(0),
 })

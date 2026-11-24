@@ -6,7 +6,9 @@ import { testServer } from "./server.js";
 import type { GameSelectionRoomState } from "../src/server/rooms/schema/MiniGameRoomState.js";
 import { INPUT_BUTTONS } from "../src/shared/constants.js";
 import { COUNTDOWN_TICKS } from "../src/shared/games/car-roquelike/destruction.js";
-import { CAR_MAX_SPEED, PHYSICS_SUBSTEPS } from "../src/shared/games/car-roquelike/constants.js";
+import { CAR_MAX_SPEED, PHYSICS_SUBSTEPS, WIN_FADE_TICKS, WIN_TEXT_TICKS } from "../src/shared/games/car-roquelike/constants.js";
+import type { CarWorld } from "../src/shared/games/car-roquelike/physics.js";
+import Matter from "matter-js";
 import { spawnPoint } from "../src/shared/games/car-roquelike/map.js";
 import { OBSTACLE_KINDS, type ObstacleKind } from "../src/shared/games/car-roquelike/obstacles.js";
 import type { Room } from "colyseus";
@@ -85,6 +87,31 @@ describe("car-roquelike room", () => {
     assert.ok(!car1.eliminated && !car2.eliminated, "everyone is back in");
     assert.strictEqual(car1.y, spawnPoint(car1.seat, room.state.roadSeed).y, "back at the new round's spawn point");
     assert.ok(room.state.carRoundTick < COUNTDOWN_TICKS, "counting down again");
+  });
+
+  it("declares the last car left the winner, and restarts after the win text and fade", async () => {
+    const { room, client1, client2 } = await startGame();
+    skipCountdown(room);
+    // Throw car 2 far off the shared camera's view: out on the next tick
+    const sim = (room as unknown as { activeGame: { world: CarWorld } }).activeGame;
+    Matter.Body.setPosition(sim.world.cars.get(client2.sessionId), { x: 1e6, y: 1e6 });
+
+    for (let i = 0; i < 10 && room.state.carWinner === ""; i++) {
+      await room.waitForNextSimulationTick();
+    }
+    assert.ok(room.state.cars.get(client2.sessionId).eliminated, "car 2 is out");
+    assert.strictEqual(room.state.carWinner, client1.sessionId);
+    assert.strictEqual(room.state.carWinnerName, "Tester");
+    assert.strictEqual(room.state.carRound, 0, "the round runs on through the win text");
+
+    // Just before the end of the win text and fade, then past it
+    room.state.carRoundTick = room.state.carWinTick + WIN_TEXT_TICKS + WIN_FADE_TICKS - 2;
+    for (let i = 0; i < 10 && room.state.carRound === 0; i++) {
+      await room.waitForNextSimulationTick();
+    }
+    assert.strictEqual(room.state.carRound, 1, "a new round started");
+    assert.strictEqual(room.state.carWinner, "", "winner cleared");
+    assert.ok(!room.state.cars.get(client2.sessionId).eliminated, "everyone is back in");
   });
 
   it("moves a car forward with throttle input", async () => {

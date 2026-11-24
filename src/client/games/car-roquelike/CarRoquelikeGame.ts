@@ -1,7 +1,7 @@
 import { Predict, type InputHandle, type SimReconciler } from '@colyseus/sdk'
 import { Cameras, GameObjects, Input, Types } from 'phaser'
 import { MAX_PLAYERS_PER_ROOM, TICK_RATE } from '@shared/constants'
-import { CAR_LENGTH, CAR_WIDTH } from '@shared/games/car-roquelike/constants'
+import { CAR_LENGTH, CAR_WIDTH, WIN_FADE_TICKS, WIN_TEXT_TICKS } from '@shared/games/car-roquelike/constants'
 import { toCarInput, type CarInput, type GameInputLike } from '@shared/games/car-roquelike/controls'
 import { COUNTDOWN_TICKS, destructionFrontS } from '@shared/games/car-roquelike/destruction'
 import { MAP_BLOCKS } from '@shared/games/car-roquelike/map'
@@ -44,6 +44,9 @@ interface RoomStateView {
   obstacles: Map<string, ObstacleView>
   carRound: number
   carRoundTick: number
+  carWinner: string
+  carWinnerName: string
+  carWinTick: number
   roadSeed: number
 }
 
@@ -72,18 +75,20 @@ const seatFields = (seat: number) => SEAT_FIELDS[seat % SEAT_FIELDS.length]
 const OBSTACLE_FIELDS: PoseFields[] = Array.from({ length: MAX_OBSTACLES }, (_, slot) => ({ x: `ox${slot}`, y: `oy${slot}`, angle: `oa${slot}` }))
 const obstacleFields = (slot: number) => OBSTACLE_FIELDS[slot % OBSTACLE_FIELDS.length]
 
-interface CarSprite {
-  container: GameObjects.Container
-  name: GameObjects.Text
-}
-
 const CAR_COLORS = [0xd94f4f, 0x4f8fd9, 0x4fd97a, 0xe0c068, 0xb05fd9, 0x4fd9d0, 0xe08a3c, 0xe8e8e8]
-const COLOR_OWN_OUTLINE = 0xffffff
+/** Our car blinks during the countdown: this long per on/off phase, at this alpha when off. */
+const OWN_BLINK_MS = 150
+const OWN_BLINK_ALPHA = 0.15
 const COLOR_BLOCK = 0x5b6169
 /** Teleports beyond this (a round restart) are cut instead of smoothed. */
 const SNAP_DISTANCE = 500
 /** The world fades in from black this long (ms) at the start of a round, into the running start. */
 const FADE_IN_MS = 1200
+/**
+ * After a win, the world fades to black this long (ms): a little under the server's
+ * `WIN_FADE_TICKS`, so it's black by the time the next round starts.
+ */
+const WIN_FADE_OUT_MS = WIN_FADE_TICKS / TICK_RATE * 1000 * 0.9
 
 /**
  * car-roquelike: every player drives a car top-down along a randomly generated road (`road.ts`,
@@ -117,7 +122,7 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     ...Object.fromEntries([...SEAT_FIELDS, ...OBSTACLE_FIELDS].flatMap(f => [[f.x, 0], [f.y, 0], [f.angle, 0]])),
   }
 
-  private cars = new Map<string, CarSprite>()
+  private cars = new Map<string, GameObjects.Container>()
   private obstacleSprites = new Map<string, GameObjects.Container>()
   private roadView: RoadView
   private destructionView: DestructionView
@@ -131,6 +136,10 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   private statusText: GameObjects.Text
   private countdownText: GameObjects.Text
   private eliminatedText: GameObjects.Text
+  /** "<name> has won!!" while a round's winner is shown. */
+  private winText: GameObjects.Text
+  /** The world is fading (or faded) to black after a win. */
+  private winFadingOut = false
   /** HUD line: whether a gamepad is detected (and which), to debug controller setups in-game. */
   private padText: GameObjects.Text
   /** Sandbox only: CPU drivers hosted by this tab (extra connections that drive like players). */
@@ -169,6 +178,7 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     // The world (not the HUD) fades in from black, into the running start
     camera.fadeIn(FADE_IN_MS, 0, 0, 0)
     this.lastRoundTick = undefined
+    this.winFadingOut = false
     this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height).ignore(this.worldLayer)
 
     this.keys = addDriveKeys(this)
@@ -206,7 +216,9 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
       { ...textStyle(160, '#ffffff'), stroke: '#000000', strokeThickness: 12 }).setOrigin(0.5)
     this.eliminatedText = this.add.text(width / 2, 110, '',
       { ...textStyle(40, '#d9776c'), stroke: '#000000', strokeThickness: 6 }).setOrigin(0.5)
-    this.uiLayer.add([this.statusText, help, this.padText, this.countdownText, this.eliminatedText])
+    this.winText = this.add.text(width / 2, height / 2 - 160, '',
+      { ...textStyle(110, '#e0c068'), stroke: '#000000', strokeThickness: 12 }).setOrigin(0.5)
+    this.uiLayer.add([this.statusText, help, this.padText, this.countdownText, this.eliminatedText, this.winText])
   }
 
   /** Start predicting (our car, and the others with it) once the server has given us a car. */
@@ -305,12 +317,11 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   protected renderState(state: RoomStateView) {
     // Sprites for cars that appeared, gone for cars that left (positions are set every frame)
     for (const [id, car] of state.cars) {
-      if (!this.cars.has(id)) this.cars.set(id, this.createCarSprite(id, car.seat))
+      if (!this.cars.has(id)) this.cars.set(id, this.createCarSprite(car.seat))
     }
     for (const [id, sprite] of this.cars) {
       if (!state.cars.has(id)) {
-        sprite.container.destroy()
-        sprite.name.destroy()
+        sprite.destroy()
         this.cars.delete(id)
       }
     }
@@ -355,16 +366,11 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     return container
   }
 
-  private createCarSprite(id: string, seat: number): CarSprite {
-    const isMe = id === this.room.sessionId
-    const color = CAR_COLORS[seat % CAR_COLORS.length]
-    const container = this.createCarShape(color, isMe ? 5 : 3, isMe ? COLOR_OWN_OUTLINE : 0x000000)
-
-    const playerName = this.state?.players.get(id)?.name ?? ''
-    const name = this.add.text(0, 0, playerName, { ...textStyle(22, isMe ? '#e0c068' : '#ffffff'), stroke: '#000000', strokeThickness: 4 })
-      .setOrigin(0.5)
-    this.worldLayer.add([container, name])
-    return { container, name }
+  /** A player's car: colored by its seat, the same for everyone (ours blinks in the countdown). */
+  private createCarSprite(seat: number): GameObjects.Container {
+    const container = this.createCarShape(CAR_COLORS[seat % CAR_COLORS.length], 3, 0x000000)
+    this.worldLayer.add(container)
+    return container
   }
 
   update(time: number) {
@@ -390,12 +396,13 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
         this.cameras.main.fadeIn(FADE_IN_MS, 0, 0, 0)
       }
       this.lastRoundTick = roundTick
+      this.updateWinFade(state)
       // This round's road, generated ahead of the leading car (the predicted world has every car)
       useRoadSeed(this.carWorld, state.roadSeed)
       maintainRoad(this.carWorld, frontS)
       this.roadView.sync(this.carWorld.road, frontS)
       this.positionObstacles(state, pose)
-      this.positionCars(state, pose)
+      this.positionCars(state, pose, roundTick < COUNTDOWN_TICKS && Math.floor(time / OWN_BLINK_MS) % 2 === 1)
       this.updateCamera(frontS)
     }
     const view = this.cameras.main.worldView
@@ -407,14 +414,31 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     this.cpuDrivers?.update(time)
   }
 
-  /** The countdown (5, 4, 3, 2, 1, GO!) and whether we're out of the round. */
+  /**
+   * A round with a winner: once its text has shown `WIN_TEXT_TICKS` (server time, so everyone
+   * fades together), the world fades to black until the server restarts the round. If the
+   * winner is cleared and the new round's tick jump went unnoticed, fade back in anyway.
+   */
+  private updateWinFade(state: RoomStateView) {
+    const fading = state.carWinner !== '' && state.carRoundTick >= state.carWinTick + WIN_TEXT_TICKS
+    if (fading && !this.winFadingOut) this.cameras.main.fadeOut(WIN_FADE_OUT_MS, 0, 0, 0)
+    else if (!fading && this.winFadingOut && state.carWinner === '') this.cameras.main.fadeIn(FADE_IN_MS, 0, 0, 0)
+    this.winFadingOut = fading
+  }
+
+  /** The countdown (5, 4, 3, 2, 1, GO!), the winner, and whether we're out of the round. */
   private updateRoundHud(roundTick: number) {
     const left = COUNTDOWN_TICKS - roundTick
     const countdown = left > 0 ? String(Math.ceil(left / TICK_RATE)) : left > -TICK_RATE ? 'GO!' : ''
     if (this.countdownText.text !== countdown) this.countdownText.setText(countdown)
 
-    const mine = this.state?.cars.get(this.room.sessionId)
-    const out = mine && this.isOut(this.room.sessionId, mine)
+    const state = this.state
+    const hasWinner = !!state?.carWinner
+    const win = hasWinner && !this.winFadingOut ? `${state.carWinnerName} has won!!` : ''
+    if (this.winText.text !== win) this.winText.setText(win)
+
+    const mine = state?.cars.get(this.room.sessionId)
+    const out = !hasWinner && mine && this.isOut(this.room.sessionId, mine)
       ? 'Eliminated! Spectating until everyone is out' : ''
     if (this.eliminatedText.text !== out) this.eliminatedText.setText(out)
   }
@@ -454,14 +478,14 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     }
   }
 
-  private positionCars(state: RoomStateView, pose: WorldPose | undefined) {
+  /** `blinkOff`: our car is in the off phase of its countdown blink. */
+  private positionCars(state: RoomStateView, pose: WorldPose | undefined, blinkOff: boolean) {
     for (const [id, sprite] of this.cars) {
       const car = state.cars.get(id)
       if (!car) continue
       // Eliminated cars have fallen into the void
       const visible = !this.isOut(id, car)
-      sprite.container.setVisible(visible)
-      sprite.name.setVisible(visible)
+      sprite.setVisible(visible)
       if (!visible) continue
 
       let x: number, y: number, angle: number
@@ -473,8 +497,8 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
         y = this.predict.value(car, 'y')
         angle = this.predict.value(car, 'angle')
       }
-      sprite.container.setPosition(x, y).setRotation(angle)
-      sprite.name.setPosition(x, y - CAR_LENGTH * 0.75)
+      sprite.setPosition(x, y).setRotation(angle)
+        .setAlpha(blinkOff && id === this.room.sessionId ? OWN_BLINK_ALPHA : 1)
     }
   }
 

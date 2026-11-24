@@ -49,6 +49,13 @@ export const CAR_MAX_SPEED = 14;
  * destruction front (with the camera) follows at the same speed (see destruction.ts).
  */
 export const COUNTDOWN_TICKS = 4 * TICK_RATE;
+/**
+ * Once only one car is left in a round that had two or more, the winner's text ("<name> has
+ * won!!") shows this many ticks, then the world fades to black for `WIN_FADE_TICKS` and the
+ * round restarts.
+ */
+export const WIN_TEXT_TICKS = 5 * TICK_RATE;
+export const WIN_FADE_TICKS = 1 * TICK_RATE;
 /** How far up the road the cars (and the front) get during the countdown. */
 export const RUNNING_START_DISTANCE = COUNTDOWN_TICKS * PHYSICS_SUBSTEPS * CAR_MAX_SPEED;
 
