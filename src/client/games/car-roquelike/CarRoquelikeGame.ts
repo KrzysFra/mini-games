@@ -12,7 +12,7 @@ import {
   type CarInput, type CarSnapshot, type CarWorld, type GameInputLike,
 } from '../../../shared/games/car-roquelike/physics'
 import { textStyle } from '../../core/ui'
-import { MiniGameScene } from '../MiniGameScene'
+import { MiniGameParent } from '../MiniGameScene'
 
 /** The fields of the server's room state this scene reads. */
 interface CarView extends CarSnapshot {
@@ -139,7 +139,7 @@ const mixColor = (a: number, b: number, t: number) => {
  * is adopted and the not-yet-confirmed inputs replayed (`predict.sim`). Other cars are drawn
  * interpolated between server updates. The camera is north-up and follows your car.
  */
-export class CarRoquelikeGame extends MiniGameScene<RoomStateView> {
+export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   private carWorld: CarWorld
   private predict: Predict
   private sim: SimReconciler<GameInputLike, CarPose, PredictedWorld> | undefined

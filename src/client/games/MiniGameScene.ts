@@ -3,7 +3,7 @@ import type { Room } from '@colyseus/sdk'
 import { currentRoom, leaveCurrentRoom } from '../core/session'
 
 /** The room state fields every mini-game relies on. */
-export interface MiniGameStateView {
+export interface MiniGameParentInteface {
   phase: string
 }
 
@@ -16,7 +16,7 @@ export interface MiniGameStateView {
  * `super({ key: 'MyGame', physics: { default: 'matter', matter: {} } })`. Leave it out for no physics.
  * An external engine is created in `createGame`, stepped in `update`, and freed in `disposeGame`.
  */
-export abstract class MiniGameScene<TState extends MiniGameStateView = MiniGameStateView> extends Scene {
+export abstract class MiniGameParent<TState extends MiniGameParentInteface = MiniGameParentInteface> extends Scene {
   room: Room
   /** The connection dropped and the SDK is trying to get it back; messages would be lost. */
   dropped = false

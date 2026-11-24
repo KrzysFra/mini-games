@@ -1,7 +1,7 @@
 import { GameObjects } from 'phaser'
 import { DEFAULT_DOT_COLOR, MAX_PLAYERS_PER_ROOM } from '../../../shared/constants'
 import { textStyle, titleStyle } from '../../core/ui'
-import { MiniGameScene } from '../MiniGameScene'
+import { MiniGameParent } from '../MiniGameScene'
 
 /** The fields of the server's room state this scene reads. */
 interface PlayerView {
@@ -36,7 +36,7 @@ const COLOR_OWN_SLOT = 0xe0c068
  * your dot a random color (picked by the server), and everyone sees it. Escape marks
  * you as done ("ESC" in your dot); once everyone has, the room returns to game selection.
  */
-export class PlaceholderGame extends MiniGameScene<RoomStateView> {
+export class PlaceholderGame extends MiniGameParent<RoomStateView> {
   slots: Slot[] = []
   statusText: GameObjects.Text
 
