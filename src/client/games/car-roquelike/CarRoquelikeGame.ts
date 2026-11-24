@@ -5,9 +5,10 @@ import { CAR_LENGTH, CAR_WIDTH } from '@shared/games/car-roquelike/constants'
 import { toCarInput, type CarInput, type GameInputLike } from '@shared/games/car-roquelike/controls'
 import { COUNTDOWN_TICKS, destructionFrontS } from '@shared/games/car-roquelike/destruction'
 import { MAP_BLOCKS } from '@shared/games/car-roquelike/map'
+import { MAX_OBSTACLES, OBSTACLE_KINDS, type ObstacleKind } from '@shared/games/car-roquelike/obstacles'
 import {
-  addCar, createCarWorld, destroyCarWorld, maintainRoad, removeCar, stepCarRound, useRoadSeed, writeCar,
-  type CarSnapshot, type CarWorld,
+  addCar, addObstacle, createCarWorld, destroyCarWorld, maintainRoad, removeCar, removeObstacle, stepCarRound,
+  useRoadSeed, writeCar, type CarSnapshot, type CarWorld,
 } from '@shared/games/car-roquelike/physics'
 import { CAMERA_ZOOM, cameraCenter } from '@shared/games/car-roquelike/camera'
 import { SANDBOX_GAME, SANDBOX_ROOM } from '@core/sandbox'
@@ -28,10 +29,19 @@ interface CarView extends CarSnapshot {
   inButtons: number
 }
 
+/** An obstacle car (`ObstacleCar` in the room state). */
+interface ObstacleView extends CarSnapshot {
+  kind: string
+  speed: number
+  lane: number
+  slot: number
+}
+
 interface RoomStateView {
   phase: string
   players: Map<string, { name: string }>
   cars: Map<string, CarView>
+  obstacles: Map<string, ObstacleView>
   carRound: number
   carRoundTick: number
   roadSeed: number
@@ -48,14 +58,19 @@ interface PredictedWorld {
 
 /**
  * What the predictor interpolates and smooths: every car's pose, in a fixed slot per seat (the SDK
- * takes the field set from the first pose, so it can't follow cars coming and going), plus the
- * round tick, so the front is drawn smoothly at our predicted time.
+ * takes the field set from the first pose, so it can't follow cars coming and going), every
+ * obstacle's in its slot likewise, plus the round tick, so the front is drawn smoothly at our
+ * predicted time.
  */
 type WorldPose = Record<string, number>
 
+interface PoseFields { x: string, y: string, angle: string }
 /** Pose field names of each seat's slot. */
-const SEAT_FIELDS = Array.from({ length: MAX_PLAYERS_PER_ROOM }, (_, seat) => ({ x: `x${seat}`, y: `y${seat}`, angle: `a${seat}` }))
+const SEAT_FIELDS: PoseFields[] = Array.from({ length: MAX_PLAYERS_PER_ROOM }, (_, seat) => ({ x: `x${seat}`, y: `y${seat}`, angle: `a${seat}` }))
 const seatFields = (seat: number) => SEAT_FIELDS[seat % SEAT_FIELDS.length]
+/** Pose field names of each obstacle slot. */
+const OBSTACLE_FIELDS: PoseFields[] = Array.from({ length: MAX_OBSTACLES }, (_, slot) => ({ x: `ox${slot}`, y: `oy${slot}`, angle: `oa${slot}` }))
+const obstacleFields = (slot: number) => OBSTACLE_FIELDS[slot % OBSTACLE_FIELDS.length]
 
 interface CarSprite {
   container: GameObjects.Container
@@ -67,6 +82,8 @@ const COLOR_OWN_OUTLINE = 0xffffff
 const COLOR_BLOCK = 0x5b6169
 /** Teleports beyond this (a round restart) are cut instead of smoothed. */
 const SNAP_DISTANCE = 500
+/** The world fades in from black this long (ms) at the start of a round, into the running start. */
+const FADE_IN_MS = 1200
 
 /**
  * car-roquelike: every player drives a car top-down along a randomly generated road (`road.ts`,
@@ -95,11 +112,17 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   private wireScratch: GameInputLike = { x: 0, y: 0, buttons: 0 }
   private eliminatedScratch: string[] = []
   /** Reused pose; a seat's slot keeps its last value while no car is in it. */
-  private worldPose: WorldPose = { roundTick: 0, ...Object.fromEntries(SEAT_FIELDS.flatMap(f => [[f.x, 0], [f.y, 0], [f.angle, 0]])) }
+  private worldPose: WorldPose = {
+    roundTick: 0,
+    ...Object.fromEntries([...SEAT_FIELDS, ...OBSTACLE_FIELDS].flatMap(f => [[f.x, 0], [f.y, 0], [f.angle, 0]])),
+  }
 
   private cars = new Map<string, CarSprite>()
+  private obstacleSprites = new Map<string, GameObjects.Container>()
   private roadView: RoadView
   private destructionView: DestructionView
+  /** The round tick drawn last frame (undefined before the first state): going back = a new round. */
+  private lastRoundTick: number | undefined
   /** Scratch point for the camera's spot on the road. */
   private cameraPoint = { x: 0, y: 0, heading: 0, s: 0 }
   private worldLayer: GameObjects.Layer
@@ -125,6 +148,7 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
 
   protected createGame() {
     this.cars = new Map()
+    this.obstacleSprites = new Map()
     this.sim = undefined
     this.carWorld = createCarWorld()
 
@@ -142,6 +166,9 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
 
     const camera = this.cameras.main
     camera.setBackgroundColor(COLOR_DIRT).setZoom(CAMERA_ZOOM).ignore(this.uiLayer)
+    // The world (not the HUD) fades in from black, into the running start
+    camera.fadeIn(FADE_IN_MS, 0, 0, 0)
+    this.lastRoundTick = undefined
     this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height).ignore(this.worldLayer)
 
     this.keys = addDriveKeys(this)
@@ -159,6 +186,8 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     this.predict = Predict.get(this.room)
     this.predict.attachAll('cars', { fields: ['x', 'y'], mode: 'lerp', delay: 100, snap: SNAP_DISTANCE })
     this.predict.attachAll('cars', { fields: ['angle'], mode: 'lerp', delay: 100, angle: true })
+    this.predict.attachAll('obstacles', { fields: ['x', 'y'], mode: 'lerp', delay: 100, snap: SNAP_DISTANCE })
+    this.predict.attachAll('obstacles', { fields: ['angle'], mode: 'lerp', delay: 100, angle: true })
     // Same handle for the room's whole life (the SDK caches it). Reliable: WebSocket has no
     // unreliable channel, so 'unreliable' would only add redundant copies (and a console warning)
     this.gameInput = this.room.input<GameInputLike>({ mode: 'reliable' })
@@ -211,6 +240,12 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
           pose[f.y] = body.position.y
           pose[f.angle] = body.angle
         }
+        for (const obstacle of world.physics.obstacles.values()) {
+          const f = obstacleFields(obstacle.slot)
+          pose[f.x] = obstacle.body.position.x
+          pose[f.y] = obstacle.body.position.y
+          pose[f.angle] = obstacle.body.angle
+        }
         pose.roundTick = world.roundTick
         return pose
       },
@@ -233,6 +268,19 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
       const body = physics.cars.get(id)
       if (body) writeCar(body, car)
       else addCar(physics, id, car.seat, car)
+    }
+    for (const id of physics.obstacles.keys()) {
+      if (!state.obstacles.has(id)) removeObstacle(physics, id)
+    }
+    for (const [id, car] of state.obstacles) {
+      const obstacle = physics.obstacles.get(id)
+      // (Ids repeat from round to round: a different obstacle may come under a known id)
+      if (obstacle && obstacle.slot === car.slot && obstacle.kind === car.kind && obstacle.lane === car.lane) {
+        writeCar(obstacle.body, car)
+        obstacle.speed = car.speed
+      } else {
+        addObstacle(physics, id, { kind: car.kind as ObstacleKind, speed: car.speed, lane: car.lane }, car.slot, car)
+      }
     }
   }
 
@@ -267,6 +315,16 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
       }
     }
 
+    for (const [id, sprite] of this.obstacleSprites) {
+      if (state.obstacles.get(id)?.kind !== sprite.getData('kind')) {
+        sprite.destroy()
+        this.obstacleSprites.delete(id)
+      }
+    }
+    for (const [id, obstacle] of state.obstacles) {
+      if (!this.obstacleSprites.has(id)) this.obstacleSprites.set(id, this.createObstacleSprite(obstacle.kind as ObstacleKind))
+    }
+
     if (!this.sim && state.cars.has(this.room.sessionId)) {
       this.adoptServerCars(this.carWorld)
       this.startPrediction()
@@ -281,15 +339,26 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     return car.eliminated || (!!this.sim && !this.carWorld.cars.has(id))
   }
 
+  /** A car's shape (body, windshield, rear window), drawn facing +x (angle 0) like the physics body. */
+  private createCarShape(color: number, outlineWidth: number, outlineColor: number): GameObjects.Container {
+    const body = this.add.rectangle(0, 0, CAR_LENGTH, CAR_WIDTH, color).setStrokeStyle(outlineWidth, outlineColor)
+    const windshield = this.add.rectangle(CAR_LENGTH * 0.12, 0, CAR_LENGTH * 0.18, CAR_WIDTH * 0.75, 0x9fd3e8)
+    const rearWindow = this.add.rectangle(-CAR_LENGTH * 0.3, 0, CAR_LENGTH * 0.1, CAR_WIDTH * 0.7, 0x6f93a3)
+    return this.add.container(0, 0, [body, windshield, rearWindow])
+  }
+
+  /** An obstacle car: colored by its kind, no name. */
+  private createObstacleSprite(kind: ObstacleKind): GameObjects.Container {
+    const container = this.createCarShape(OBSTACLE_KINDS[kind]?.color ?? 0x808080, 3, 0x000000)
+      .setData('kind', kind).setVisible(false)
+    this.worldLayer.add(container)
+    return container
+  }
+
   private createCarSprite(id: string, seat: number): CarSprite {
     const isMe = id === this.room.sessionId
     const color = CAR_COLORS[seat % CAR_COLORS.length]
-    // Drawn facing +x (angle 0), like the physics body
-    const body = this.add.rectangle(0, 0, CAR_LENGTH, CAR_WIDTH, color)
-      .setStrokeStyle(isMe ? 5 : 3, isMe ? COLOR_OWN_OUTLINE : 0x000000)
-    const windshield = this.add.rectangle(CAR_LENGTH * 0.12, 0, CAR_LENGTH * 0.18, CAR_WIDTH * 0.75, 0x9fd3e8)
-    const rearWindow = this.add.rectangle(-CAR_LENGTH * 0.3, 0, CAR_LENGTH * 0.1, CAR_WIDTH * 0.7, 0x6f93a3)
-    const container = this.add.container(0, 0, [body, windshield, rearWindow])
+    const container = this.createCarShape(color, isMe ? 5 : 3, isMe ? COLOR_OWN_OUTLINE : 0x000000)
 
     const playerName = this.state?.players.get(id)?.name ?? ''
     const name = this.add.text(0, 0, playerName, { ...textStyle(22, isMe ? '#e0c068' : '#ffffff'), stroke: '#000000', strokeThickness: 4 })
@@ -316,10 +385,16 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     const roundTick = pose ? pose.roundTick : (state?.carRoundTick ?? 0)
     const frontS = destructionFrontS(roundTick)
     if (state) {
+      // A new round (the tick went back): fade in again. (Small steps back are prediction corrections.)
+      if (this.lastRoundTick !== undefined && roundTick < this.lastRoundTick - TICK_RATE) {
+        this.cameras.main.fadeIn(FADE_IN_MS, 0, 0, 0)
+      }
+      this.lastRoundTick = roundTick
       // This round's road, generated ahead of the leading car (the predicted world has every car)
       useRoadSeed(this.carWorld, state.roadSeed)
       maintainRoad(this.carWorld, frontS)
       this.roadView.sync(this.carWorld.road, frontS)
+      this.positionObstacles(state, pose)
       this.positionCars(state, pose)
       this.updateCamera(frontS)
     }
@@ -360,6 +435,23 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     if (this.dropped) return
     console.info(`[car-roquelike] escape sent (${source})`)
     this.room.send('escape')
+  }
+
+  /** Obstacles, like the cars: from the predicted world once predicting (gone once it drops them). */
+  private positionObstacles(state: RoomStateView, pose: WorldPose | undefined) {
+    for (const [id, sprite] of this.obstacleSprites) {
+      const obstacle = state.obstacles.get(id)
+      const visible = !!obstacle && (!this.sim || this.carWorld.obstacles.has(id))
+      sprite.setVisible(visible)
+      if (!visible) continue
+      if (pose) {
+        const f = obstacleFields(obstacle.slot)
+        sprite.setPosition(pose[f.x], pose[f.y]).setRotation(pose[f.angle])
+      } else {
+        sprite.setPosition(this.predict.value(obstacle, 'x'), this.predict.value(obstacle, 'y'))
+          .setRotation(this.predict.value(obstacle, 'angle'))
+      }
+    }
   }
 
   private positionCars(state: RoomStateView, pose: WorldPose | undefined) {

@@ -42,6 +42,28 @@ export const Car = schema({
 export type Car = SchemaType<typeof Car>
 
 /**
+ * An obstacle car in car-roquelike (computer-driven, see `shared/games/car-roquelike/obstacles.ts`):
+ * its full physics state and its traits, so clients can predict it.
+ */
+export const ObstacleCar = schema({
+  x: t.float32(),
+  y: t.float32(),
+  angle: t.float32(),
+  vx: t.float32(),
+  vy: t.float32(),
+  av: t.float32(),
+  /** Its kind (`ObstacleKind`), shown as its color; decides how it drives. */
+  kind: t.string().default("brown"),
+  /** Share of top speed it drives at. */
+  speed: t.float32(),
+  /** Offset from the road's centerline it drives at (+ = right). */
+  lane: t.float32(),
+  /** Pose slot (0..`MAX_OBSTACLES`) clients draw it from. */
+  slot: t.uint8(),
+})
+export type ObstacleCar = SchemaType<typeof ObstacleCar>
+
+/**
  * One player input per fixed tick (`defineInput`), shared by every mini-game that needs
  * continuous input: two analog axes plus a button bitmask.
  */
@@ -64,6 +86,8 @@ export const GameSelectionRoomState = schema({
   players: t.map(Player),
   /** car-roquelike: one car per player (by sessionId) while the game runs. */
   cars: t.map(Car),
+  /** car-roquelike: obstacle cars on the road, by id; cleared with each new round. */
+  obstacles: t.map(ObstacleCar),
   /** car-roquelike: rounds played since the game started; goes up on every restart. */
   carRound: t.uint16().default(0),
   /** car-roquelike: ticks this round has run (countdown included); drives the destruction front. */

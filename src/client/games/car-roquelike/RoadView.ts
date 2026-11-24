@@ -1,6 +1,6 @@
 import { GameObjects, Geom, Math as PMath, type Scene } from 'phaser'
 import { ROAD_WIDTH } from '@shared/games/car-roquelike/constants'
-import { pointOnPiece, roadTail, type Road, type RoadPiece } from '@shared/games/car-roquelike/road'
+import { piecesInPlay, pointOnPiece, roadTail, type Road, type RoadPiece } from '@shared/games/car-roquelike/road'
 
 export const COLOR_DIRT = 0x6b4f33
 export const COLOR_ROAD = 0x3a3d42
@@ -35,7 +35,7 @@ const dash = [new PMath.Vector2(), new PMath.Vector2(), new PMath.Vector2(), new
 
 /**
  * The ground: endless dirt (a TileSprite re-fitted to the camera's view each frame) and the road,
- * one Graphics per committed piece, added as the road grows, destroyed once the piece is deleted
+ * one Graphics per piece in play, added as it comes into play (off screen), destroyed once it's deleted
  * behind the front, and culled to the view (Graphics are re-tessellated every frame they render).
  */
 export class RoadView {
@@ -44,7 +44,7 @@ export class RoadView {
   /** The road being drawn (this round's). */
   private road: Road | undefined
   private pieces: DrawnPiece[] = []
-  /** Index in `road.pieces` of the next piece to draw once it's committed. */
+  /** Index in `road.pieces` of the next piece to draw once it's in play. */
   private nextPiece = 0
 
   constructor(private scene: Scene, parent: GameObjects.Layer) {
@@ -55,7 +55,7 @@ export class RoadView {
   }
 
   /**
-   * Keep the drawn road in step with the road in play: new committed pieces are drawn, deleted
+   * Keep the drawn road in step with the road in play: pieces coming into play are drawn, deleted
    * ones go, and the piece the deletion line is in is redrawn from that line (only when it has
    * moved a bit). A new round's road replaces everything.
    */
@@ -79,8 +79,8 @@ export class RoadView {
       this.drawPiece(first, Math.max(first.piece.startS, tail))
     }
 
-    // Newly committed pieces
-    for (; this.nextPiece < road.committedPieces; this.nextPiece++) {
+    // Pieces come into play
+    for (const inPlay = piecesInPlay(road, frontS); this.nextPiece < inPlay; this.nextPiece++) {
       const piece = road.pieces[this.nextPiece]
       if (pieceEnd(piece) <= tail) continue
       const drawn = { piece, graphics: this.scene.add.graphics(), bounds: new Geom.Rectangle(), drawnFrom: 0 }

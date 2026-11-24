@@ -1,10 +1,11 @@
-import { TICK_RATE } from "../../constants.js";
-import { CAR_MAX_SPEED, PHYSICS_SUBSTEPS } from "./constants.js";
+import { CAR_MAX_SPEED, COUNTDOWN_TICKS, PHYSICS_SUBSTEPS } from "./constants.js";
 import { chunkOwnerS, roadTail, type Road } from "./road.js";
 
 /**
  * The destruction front: the world (road and dirt alike) collapses into the void, starting at the
- * road's start and moving along the road at a steady pace once the countdown is over. A car whose
+ * road's start and moving along the road at a steady pace a bit below the cars' top speed, from
+ * the start of the round (during the countdown, the running start, the cars drive away from it
+ * at top speed, out of reach). A car whose
  * center is over destroyed ground is eliminated. Once road is out of `ROAD_RADIUS` of the camera,
  * behind it, it is deleted and the ground restored (dirt again, free for new road): the void is a band
  * that follows the front.
@@ -23,8 +24,7 @@ import { chunkOwnerS, roadTail, type Road } from "./road.js";
  * ground has been restored.
  */
 
-/** Ticks (`TICK_RATE`) before the front starts moving; cars are frozen meanwhile. */
-export const COUNTDOWN_TICKS = 4 * TICK_RATE;
+export { COUNTDOWN_TICKS };
 /** How far the front moves along the road per physics step: 95% of a car's top speed. */
 export const DESTRUCTION_SPEED = 0.95 * CAR_MAX_SPEED;
 
@@ -34,9 +34,13 @@ export const CHUNK_JITTER = 160;
 /** Chunks per cell of the smooth noise that shapes the edge. */
 const NOISE_CELL = 6;
 
-/** The front's distance along the road after `roundTick` ticks (may be fractional, for drawing). */
+/**
+ * The front's distance along the road after `roundTick` ticks (may be fractional, for drawing):
+ * moving at `DESTRUCTION_SPEED` from the start of the round, countdown included, so the running
+ * start (at top speed) slowly pulls the cars away from it.
+ */
 export function destructionFrontS(roundTick: number): number {
-  return Math.max(0, roundTick - COUNTDOWN_TICKS) * PHYSICS_SUBSTEPS * DESTRUCTION_SPEED;
+  return Math.max(0, roundTick) * PHYSICS_SUBSTEPS * DESTRUCTION_SPEED;
 }
 
 /** Index of the chunk column/row containing a world coordinate. */

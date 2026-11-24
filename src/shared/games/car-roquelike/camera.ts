@@ -1,4 +1,4 @@
-import { CAMERA_AHEAD_OF_FRONT } from "./constants.js";
+import { CAMERA_AHEAD_OF_FRONT, VIEW_HALF_HEIGHT, VIEW_HALF_WIDTH } from "./constants.js";
 import { roadPointAt, type Road, type RoadSample } from "./road.js";
 
 /**
@@ -7,18 +7,8 @@ import { roadPointAt, type Road, type RoadSample } from "./road.js";
  * that leave it (`isOutOfView`) and the client draws exactly that view.
  */
 
-/** The game's logical screen size (`main.ts`; `Scale.FIT` keeps it whatever the window). */
-export const SCREEN_WIDTH = 1920;
-export const SCREEN_HEIGHT = 1080;
-/**
- * Fixed zoom. At 0.45 the view reaches 1200 above its center, so the spawn grid (500..600 up the
- * road from the camera during the countdown) is on screen at the start.
- */
-export const CAMERA_ZOOM = 0.45;
 export { CAMERA_AHEAD_OF_FRONT };
-/** Half the world area the camera shows. */
-export const VIEW_HALF_WIDTH = SCREEN_WIDTH / 2 / CAMERA_ZOOM;
-export const VIEW_HALF_HEIGHT = SCREEN_HEIGHT / 2 / CAMERA_ZOOM;
+export { CAMERA_ZOOM, SCREEN_HEIGHT, SCREEN_WIDTH, VIEW_HALF_HEIGHT, VIEW_HALF_WIDTH } from "./constants.js";
 
 /** The camera's center with the front at `frontS` (the road must be generated that far). */
 export function cameraCenter(road: Road, frontS: number, out?: RoadSample): RoadSample {

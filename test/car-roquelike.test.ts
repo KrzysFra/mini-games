@@ -6,11 +6,18 @@ import { testServer } from "./server.js";
 import type { GameSelectionRoomState } from "../src/server/rooms/schema/MiniGameRoomState.js";
 import { INPUT_BUTTONS } from "../src/shared/constants.js";
 import { COUNTDOWN_TICKS } from "../src/shared/games/car-roquelike/destruction.js";
+import { CAR_MAX_SPEED, PHYSICS_SUBSTEPS } from "../src/shared/games/car-roquelike/constants.js";
+import { spawnPoint } from "../src/shared/games/car-roquelike/map.js";
+import { OBSTACLE_KINDS, type ObstacleKind } from "../src/shared/games/car-roquelike/obstacles.js";
+import type { Room } from "colyseus";
+import type { CarRoquelikeSim } from "../src/server/games/car-roquelike/CarRoquelikeSim.js";
 
 const GAME = "car-roquelike";
 
-/** Jump the round past its 5 s countdown, so cars can move right away. */
-const skipCountdown = (state: GameSelectionRoomState) => { state.carRoundTick = COUNTDOWN_TICKS; };
+/** Jump the round past its countdown (cars where the running start ends), so players drive right away. */
+const skipCountdown = (room: Room<any>) => {
+  (room as unknown as { activeGame: CarRoquelikeSim }).activeGame.setRoundTick(COUNTDOWN_TICKS);
+};
 
 describe("car-roquelike room", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
@@ -46,27 +53,29 @@ describe("car-roquelike room", () => {
     assert.ok(car1.x !== car2.x || car1.y !== car2.y, "distinct spawn points");
   });
 
-  it("holds cars still during the countdown", async () => {
+  it("drives every car straight north at top speed during the countdown, ignoring input", async () => {
     const { room, client1 } = await startGame();
     const car = room.state.cars.get(client1.sessionId);
+    const startX = car.x;
     const startY = car.y;
 
     const input = client1.input();
     for (let i = 0; i < 10; i++) {
-      input.data.y = -1;
+      input.data.x = 1; // east: ignored
       input.send();
       await room.waitForNextSimulationTick();
     }
     assert.ok(room.state.carRoundTick < COUNTDOWN_TICKS, "still counting down");
-    assert.strictEqual(car.y, startY, "didn't move");
+    assert.strictEqual(car.x, startX, "straight");
+    assert.ok(car.y < startY - 10 * CAR_MAX_SPEED, `drove north (from ${startY} to ${car.y})`);
+    assert.deepStrictEqual([car.vx, car.vy, car.angle], [0, -CAR_MAX_SPEED, -Math.PI / 2], "at top speed");
   });
 
   it("eliminates cars caught by the destruction, and restarts once everyone is out", async () => {
     const { room, client1, client2 } = await startGame();
     const car1 = room.state.cars.get(client1.sessionId);
     const car2 = room.state.cars.get(client2.sessionId);
-    const spawnY = car1.y;
-    // Nobody drives, and the front starts out almost at the spawn (it takes ~60 ticks to get there)
+    // The front jumps past the cars (left near their spawns): everyone is out at once
     room.state.carRoundTick = COUNTDOWN_TICKS + 50;
 
     for (let i = 0; i < 60 && room.state.carRound === 0; i++) {
@@ -74,13 +83,13 @@ describe("car-roquelike room", () => {
     }
     assert.strictEqual(room.state.carRound, 1, "a new round started");
     assert.ok(!car1.eliminated && !car2.eliminated, "everyone is back in");
-    assert.strictEqual(car1.y, spawnY, "back at the spawn point");
+    assert.strictEqual(car1.y, spawnPoint(car1.seat, room.state.roadSeed).y, "back at the new round's spawn point");
     assert.ok(room.state.carRoundTick < COUNTDOWN_TICKS, "counting down again");
   });
 
   it("moves a car forward with throttle input", async () => {
     const { room, client1 } = await startGame();
-    skipCountdown(room.state);
+    skipCountdown(room);
     const car = room.state.cars.get(client1.sessionId);
     const startY = car.y;
 
@@ -96,7 +105,7 @@ describe("car-roquelike room", () => {
 
   it("shows every car's last applied input, so clients can predict other players", async () => {
     const { room, client1, client2 } = await startGame();
-    skipCountdown(room.state);
+    skipCountdown(room);
     const input = client1.input();
     for (let i = 0; i < 5; i++) {
       input.data.x = 0.5;
@@ -112,6 +121,29 @@ describe("car-roquelike room", () => {
     // No input from client2 yet: zeros
     const other = room.state.cars.get(client2.sessionId);
     assert.deepStrictEqual([other.inX, other.inY, other.inButtons], [0, 0, 0]);
+  });
+
+  it("spawns obstacle cars on the road ahead, driving along it, and clears them when the game ends", async () => {
+    const { room, client1, client2 } = await startGame();
+    skipCountdown(room);
+    await room.waitForNextSimulationTick();
+    assert.ok(room.state.obstacles.size > 0, "obstacles on the road ahead");
+    const [id, obstacle] = [...room.state.obstacles][0];
+    const kind = OBSTACLE_KINDS[obstacle.kind as ObstacleKind];
+    assert.ok(kind, `a known kind (${obstacle.kind})`);
+    assert.ok(obstacle.speed >= Math.fround(kind.minSpeed) && obstacle.speed <= Math.fround(kind.maxSpeed), `speed ${obstacle.speed}`);
+    const start = { x: obstacle.x, y: obstacle.y };
+    for (let i = 0; i < 5; i++) { await room.waitForNextSimulationTick(); }
+    const moved = Math.hypot(obstacle.x - start.x, obstacle.y - start.y);
+    const expected = 5 * PHYSICS_SUBSTEPS * obstacle.speed * CAR_MAX_SPEED;
+    assert.ok(room.state.obstacles.get(id) === obstacle && moved > 0.8 * expected, `drives (${moved} of ${expected})`);
+
+    client1.send("escape");
+    client2.send("escape");
+    await room.waitForNextMessage();
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "selection");
+    assert.strictEqual(room.state.obstacles.size, 0, "obstacles cleared");
   });
 
   it("removes a leaving player's car, and clears all cars when the game ends", async () => {
@@ -150,7 +182,7 @@ describe("car-roquelike room", () => {
     const room = colyseus.getRoomById<GameSelectionRoomState>(client.roomId);
     const car = room.state.cars.get(client.sessionId);
     assert.ok(car, "a car on join");
-    skipCountdown(room.state);
+    skipCountdown(room);
 
     const input = client.input();
     for (let i = 0; i < 10; i++) {

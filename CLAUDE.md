@@ -41,7 +41,7 @@ src/server/games/      server side of mini-games that simulate: registry.ts (`MI
                        factory), types.ts, car-roquelike/CarRoquelikeSim.ts (authoritative matter world)
 src/shared/games/      per-game shared code: car-roquelike/ (constants, controls.ts (input → `CarControls`),
                        physics.ts (the `matter-js` world), handling.ts (axle-model tyre forces, `driveCar`),
-                       map.ts, destruction.ts, road.ts)
+                       map.ts, destruction.ts, road.ts, obstacles.ts (obstacle cars: kinds, spawn rolls, driving))
 src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
 src/server/rooms/GameSelectionRoom.ts   the game room (type `my_room`): selection → playing
 src/server/rooms/SandboxRoom.ts   dev-only `sandbox` room (extends GameSelectionRoom)
@@ -136,29 +136,38 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `CAR_TURN_RATE` (`speed × tan(angle) / wheelbase`), at most `CAR_MAX_WHEEL_ANGLE`
   (×`CAR_HANDBRAKE_TURN_BOOST` with handbrake). World: an endless random road (`road.ts`):
   `ROAD_WIDTH` 400 wide, straights 400..2000 and corners of radius 400..2000 turning 0..120°, from
-  `state.roadSeed` (new per round). It starts at the origin with a fixed 2000 straight north (the 2×4
+  `state.roadSeed` (new per round). It starts at the origin with a fixed straight north (`START_STRAIGHT_LENGTH`, the running start plus 2400; the 2×4
   spawn grid is on it), then may go any direction. It is one fixed sequence per seed, generated on
-  demand: `maintainRoad` (server each tick, client each frame) runs `ensureRoadAround`, which commits
-  road until its end is `ROAD_RADIUS` (5000, straight-line, world units) from the camera center, and
-  prunes old data. Road behind the camera that has been out of that radius is deleted together with all
-  road before it (dirt again; `roadTail(road, frontS)`, from per-sample `Road.tails`: a pure function of
-  the road, never decreasing, so deleted road never returns). The view's corners are ~2450 from its
-  center, so none of this is on screen. Determinism however far/when each side generated: a new piece
-  keeps 1200 clear only of the last `CLEARANCE_WINDOW` (20000) of road (older ground is reused), and the generator
-  runs `COMMIT_BUFFER` (15000) beyond the committed road it hands out, backtracking out of dead ends
-  only within that (stuck at committed road, it forces a piece: rarely, a crossing). Only committed
-  road is used. Lookups: centerline samples (absolute indices, `sampleBase` after pruning) in a spatial
+  demand: `maintainRoad` (server each tick, client each frame) runs `ensureRoadAround`, and prunes old
+  data. The road in play is measured along the road from the camera center (pure functions of
+  `frontS`, so every side agrees): ahead, every piece starting within `ROAD_AHEAD` (5500;
+  `piecesInPlay`, `roadEnd`), behind, up to `ROAD_BEHIND` (5000; `roadTail(road, frontS)`, never
+  decreasing; road before it is deleted, dirt again, for good). Generator guarantees (`hasClearance`):
+  stretches `VIEW_SEPARATION` (4500) or more apart along the road are never in the same view (+road
+  half width +150), so pieces come into play and are deleted off screen; and road keeps 1200 clear of
+  all road that can be in play with it (`CLEARANCE_WINDOW` = ahead + behind + longest piece), so the
+  road in play never crosses itself (long-deleted ground is reused). Determinism however far/when each
+  side generated: the generator runs `COMMIT_BUFFER` (15000) beyond the committed road it hands out,
+  backtracking out of dead ends only within that; road is committed only up to an open piece end (a
+  straight on from it passes the checks for the whole window, `isOpenEnd`), so stuck at committed road
+  a straight always fits (never forced into a crossing). Only committed road is generated for good;
+  lookups only see the road in play.
+  Lookups: centerline samples (absolute indices, `sampleBase` after pruning) in a spatial
   grid: `isOnRoad(road, x, y, frontS)`, `roadDistanceAt`, `chunkOwnerS` (a chunk's owner = nearest
   sample within `ownerWindowStart`, deleted road included; memoized, updated incrementally). The server
   builds its own `buildRoad` per room; the client uses `getRoad` (cached per seed). Endless dirt
   everywhere else (no walls, no camera bounds); on dirt the top speed is ×`DIRT_SPEED_FACTOR` (0.5) and
   faster cars roll down to it. `CarWorld.road`/`frontS` carry the road into the physics. The client
   draws the dirt as a TileSprite re-fitted to the view each frame, and the road as one Graphics per
-  committed piece (added as committed, destroyed once deleted, the tail piece redrawn cut at the tail),
+  piece in play (added as it comes into play, destroyed once deleted, the tail piece redrawn cut at the tail),
   culled to the view.
-  Rounds: `state.carRoundTick` counts ticks; the first `COUNTDOWN_TICKS` are a countdown with physics
-  frozen. Then the destruction front (`destruction.ts`) moves along the road from its start at
-  `DESTRUCTION_SPEED`: a chunk is void once the front passes its owner's distance along the road (dirt
+  Rounds: `state.carRoundTick` counts ticks; the first `COUNTDOWN_TICKS` are a countdown, the running start: inputs are ignored and every car drives
+  straight north from its spawn at `CAR_MAX_SPEED` (`runningStartPose(seat, seed, tick)`, written directly, no
+  physics or elimination; cars spawn already at that speed; `CarWorld.seats` maps ids to seats). The
+  back row's base slots are `CHUNK_JITTER` + 150 up the road, just ahead of the void's edge; each round every slot moves up
+  a further 1..2 car lengths (`spawnPoint(seat, roadSeed)`, hashed, so not lined up). The destruction front
+  (`destruction.ts`) moves along the road from its start at `DESTRUCTION_SPEED` from tick 0 (countdown
+  included), so the cars slowly pull away from it during the countdown: a chunk is void once the front passes its owner's distance along the road (dirt
   goes with the stretch of road beside it), and restored once its owner is deleted, so the void is a
   band following the front. The front edge is ragged: per-`CHUNK_SIZE`-chunk break points
   (`chunkBreakS`, integer-hash noise). A car whose center is over a void chunk, or outside the shared
@@ -166,12 +175,35 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   (`carRound++`, new road, cars back at their spawns). Eliminated players' inputs are still consumed so
   their acks advance. The client predicts the round tick with its inputs (in the sim world, adopted from
   `carRoundTick`), draws the front at that predicted time (fallen chunks as merged void runs,
-  cracking/falling chunks at the edge).
-  Room tests skip the countdown by setting `state.carRoundTick`. The scene enables gamepads itself via
+  cracking/falling chunks at the edge). The client's world camera fades in from black (`FADE_IN_MS`)
+  when the scene starts and whenever the drawn round tick jumps back (a new round).
+  Room tests skip the countdown with the sim's `setRoundTick` (also moves the cars to the end of the running start). The scene enables gamepads itself via
   `input: { gamepad: true }` in its settings (missing from Phaser 4's `SettingsConfig` type, so it's widened). Camera: the same for everyone, north-up, fixed zoom (`CAMERA_ZOOM`), centered on the road `CAMERA_AHEAD_OF_FRONT` (1000) ahead of the predicted front
-  (`cameraCenter`); its geometry is shared (`shared/games/car-roquelike/camera.ts`, `SCREEN_WIDTH/HEIGHT` = the
-  1920×1080 logical screen) so the server eliminates cars off it;
+  (`cameraCenter`); its geometry is shared (`shared/games/car-roquelike/camera.ts`, re-exporting the view size from
+  `constants.ts`, `SCREEN_WIDTH/HEIGHT` = the 1920×1080 logical screen) so the server eliminates cars off it;
   the HUD is on a second camera (world and HUD in separate layers, each camera ignores the other).
+  Obstacle cars (`obstacles.ts`): computer-driven cars in the same matter world (`CarWorld.obstacles`,
+  replicated in `state.obstacles`, cleared with each new road); their behavior is their kind = color.
+  Only the server spawns them (`spawnObstacles`, each tick after `maintainRoad`): road after the first
+  straight is rolled once per `OBSTACLE_SEGMENT` (100) as it comes within `ROAD_RADIUS` of the camera,
+  `OBSTACLE_CHANCE` (30%) each, from a hash of (seed, segment) (`rollObstacle`), at most `MAX_OBSTACLES`
+  (48) at once, each in a pose slot. Kinds are one table, `OBSTACLE_KINDS` (tune there): per kind
+  `color`, `weight` (its share of spawns, relative to the others' weights), `minSpeed..maxSpeed`
+  (each car's `speed` = throttle, rolled in it), `direction` (1 along the road, -1 the wrong way)
+  and `avoidsCars`. Every obstacle always drives at its own speed in its own `lane` (+ = right of
+  the road's direction), aiming `OBSTACLE_LOOKAHEAD` along the road its way; it generates the road
+  ahead of itself (`ensureRoad`), as it can outrun the road around the camera. `brown` (90%,
+  0.5..0.9) avoids cars: it keeps `OBSTACLE_KEEP_GAP` (one car length) from every car, players' too,
+  by steering only: in the road's frame (turned its way), a car whose path comes within that (now,
+  or within `DODGE_TIME` at the closing speed) makes it swerve aside (around the other side if the
+  road's edge is in the way; aiming closer for a car ahead); it won't move toward a car alongside
+  (hemmed in: holds its line), unless that leaves it in the way of a car coming at it (head-ons
+  stall both cars). In heavy traffic they still graze now and then. `red` (10%, 0.2) drives the
+  wrong way, keeping to its lane whatever is in the way; it doesn't spawn with a car coming at it
+  within `ONCOMING_SPAWN_CLEARANCE` (500) in its lane (tries a few other lanes first).
+  `obstacleInput` is pure, so `stepCarWorld` drives them on both sides (also during the countdown,
+  where the players' running start is written over the step); the client adopts them on each ack
+  and draws them from the predicted world via per-slot pose fields. They're removed over the void.
   Velocities are matter units (px per 1000/60 ms), which is also the physics step.
   Physics tests: `car-roquelike-physics.test.ts` (controls, road, destruction, rounds) and
   `car-roquelike-handling.test.ts` (driving, grip, collisions).
