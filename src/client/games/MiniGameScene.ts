@@ -1,6 +1,6 @@
 import { Scene, Types } from 'phaser'
 import type { Room } from '@colyseus/sdk'
-import { currentRoom, leaveCurrentRoom } from '../core/session'
+import { currentRoom, leaveCurrentRoom } from '@core/session'
 
 /** The room state fields every mini-game relies on. */
 export interface MiniGameParentInteface {

@@ -17,17 +17,17 @@ const placeholder: ClientMiniGame = {
 
 const carRoquelike: ClientMiniGame = {
   key: 'CarRoquelikeGame',
-  load: () => import('./car-roquelike/CarRoquelikeGame').then(m => m.CarRoquelikeGame),
+  load: () => import('./car-roquelike/car-roquelike-arcade/CarRoquelikeGame').then(m => m.CarRoquelikeGame),
 }
 
 const carRoquelikeMjsTorque: ClientMiniGame = {
   key: 'CarRoquelikeMjsTorqueGame',
-  load: () => import('./car-roquelike-mjs-torque/CarRoquelikeMjsTorqueGame').then(m => m.CarRoquelikeMjsTorqueGame),
+  load: () => import('./car-roquelike/car-roquelike-mjs-torque/CarRoquelikeMjsTorqueGame').then(m => m.CarRoquelikeMjsTorqueGame),
 }
 
 const carRoquelikeMjsAxle: ClientMiniGame = {
   key: 'CarRoquelikeMjsAxleGame',
-  load: () => import('./car-roquelike-mjs-axle/CarRoquelikeMjsAxleGame').then(m => m.CarRoquelikeMjsAxleGame),
+  load: () => import('./car-roquelike/car-roquelike-mjs-axle/CarRoquelikeMjsAxleGame').then(m => m.CarRoquelikeMjsAxleGame),
 }
 
 /** Client side of each `MINI_GAMES` entry (`src/shared/games.ts`), by id. */

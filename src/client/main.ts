@@ -1,5 +1,5 @@
 import { AUTO, Game, Scale, Types } from 'phaser'
-import { configLobby } from './game/scenes/Lobby'
+import { configLobby } from './scenes/Lobby'
 
 let currentGameIndex = 0
 let currentGame: Game = undefined

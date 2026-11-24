@@ -1,4 +1,4 @@
-import { DEFAULT_MINI_GAME } from '../../shared/games'
+import { DEFAULT_MINI_GAME } from '@shared/games'
 
 /**
  * Sandbox mode (dev only): set `VITE_SANDBOX=<mini-game id>` in `.env.local` and every client

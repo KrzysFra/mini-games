@@ -1,9 +1,9 @@
 import type { InputHandle, Room } from '@colyseus/sdk'
-import { MAX_PLAYERS_PER_ROOM, SANDBOX_CPU_PLAYERS, TICK_RATE } from '../../../shared/constants'
-import { destructionFrontS } from '../../../shared/games/car-roquelike/destruction'
-import { getRoad, roadDistanceAt, roadPointAt } from '../../../shared/games/car-roquelike/road'
-import type { GameInputLike } from '../../../shared/games/car-roquelike-mjs-torque/physics'
-import { client } from '../../core/network'
+import { MAX_PLAYERS_PER_ROOM, SANDBOX_CPU_PLAYERS, TICK_RATE } from '@shared/constants'
+import { destructionFrontS } from '@shared/games/car-roquelike/destruction'
+import { getRoad, roadDistanceAt, roadPointAt } from '@shared/games/car-roquelike/road'
+import type { GameInputLike } from '@shared/games/car-roquelike-mjs-axle/physics'
+import { client } from '@core/network'
 
 /** The fields of the room state a CPU driver reads (from its own connection's copy). */
 interface CpuCarView {
@@ -193,7 +193,7 @@ export class CpuDrivers {
         room.onLeave(() => { this.drivers = this.drivers.filter(d => d !== driver) })
       })
       // Another tab got there first, or the room is full: try again later
-      .catch(e => console.info('[car-roquelike-mjs-torque] CPU driver not joined:', e?.message ?? e))
+      .catch(e => console.info('[car-roquelike-mjs-axle] CPU driver not joined:', e?.message ?? e))
       .finally(() => { this.joining = false })
   }
 }

@@ -1,19 +1,19 @@
 import { Predict, type InputHandle, type SimReconciler } from '@colyseus/sdk'
 import { Cameras, GameObjects, Geom, Input, Math as PMath, Types } from 'phaser'
-import { INPUT_BUTTONS, MAX_PLAYERS_PER_ROOM, TICK_RATE } from '../../../shared/constants'
-import { CAR_LENGTH, CAR_WIDTH, ROAD_WIDTH } from '../../../shared/games/car-roquelike/constants'
+import { INPUT_BUTTONS, MAX_PLAYERS_PER_ROOM, TICK_RATE } from '@shared/constants'
+import { CAR_LENGTH, CAR_WIDTH, ROAD_WIDTH } from '@shared/games/car-roquelike-mjs-axle/constants'
 import {
   CHUNK_SIZE, COUNTDOWN_TICKS, chunkBreakS, chunkHash, chunkIndex, destructionFrontS,
-} from '../../../shared/games/car-roquelike/destruction'
-import { MAP_BLOCKS } from '../../../shared/games/car-roquelike/map'
-import { getRoad, isOnRoad, pointOnPiece, roadPointAt, roadTail, type Road, type RoadPiece } from '../../../shared/games/car-roquelike/road'
+} from '@shared/games/car-roquelike/destruction'
+import { MAP_BLOCKS } from '@shared/games/car-roquelike/map'
+import { getRoad, isOnRoad, pointOnPiece, roadPointAt, roadTail, type Road, type RoadPiece } from '@shared/games/car-roquelike/road'
 import {
   addCar, createCarWorld, destroyCarWorld, maintainRoad, removeCar, stepCarRound, toCarInput, writeCar,
   type CarInput, type CarSnapshot, type CarWorld, type GameInputLike,
-} from '../../../shared/games/car-roquelike/physics'
-import { SANDBOX_GAME, SANDBOX_ROOM } from '../../core/sandbox'
-import { textStyle } from '../../core/ui'
-import { MiniGameParent } from '../MiniGameScene'
+} from '@shared/games/car-roquelike-mjs-axle/physics'
+import { SANDBOX_GAME, SANDBOX_ROOM } from '@core/sandbox'
+import { textStyle } from '@core/ui'
+import { MiniGameParent } from '../../MiniGameScene'
 import { CpuDrivers } from './CpuDrivers'
 
 /** The fields of the server's room state this scene reads. */
@@ -139,6 +139,10 @@ const mixColor = (a: number, b: number, t: number) => {
 }
 
 /**
+ * car-roquelike-mjs-axle: an A/B clone of car-roquelike whose cars are driven by matter-js tyre
+ * forces at the front and rear axles (`shared/games/car-roquelike-mjs-axle/physics.ts`); road,
+ * destruction and map are shared.
+ *
  * car-roquelike: every player drives a car top-down along a randomly generated road (`road.ts`,
  * a new one each round, from `roadSeed`) surrounded by endless dirt (which halves top speed); cars
  * collide with each other. After a countdown the world collapses into the void from the road's
@@ -148,14 +152,14 @@ const mixColor = (a: number, b: number, t: number) => {
  * The road is one Graphics per piece, culled to the view. The void and its ragged edge are drawn
  * chunk by chunk each frame (flat void, cracking and falling chunks), all derived from the front.
  *
- * The server runs the authoritative matter.js world (`CarRoquelikeSim`). This scene runs the same
+ * The server runs the authoritative matter.js world (`CarRoquelikeMjsAxleSim`). This scene runs the same
  * shared physics locally to predict its own car: inputs apply immediately, and each server update
  * is adopted and the not-yet-confirmed inputs replayed (`predict.sim`). Other cars are predicted in
  * the same world, repeating the input the server last applied to them (`Car.inX/inY/inButtons`),
  * and every car is drawn from it (interpolated and correction-smoothed by the SDK), so what you see
  * is what you hit. Until our own car exists, other cars are drawn interpolated between server updates.
  */
-export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
+export class CarRoquelikeMjsAxleGame extends MiniGameParent<RoomStateView> {
   private carWorld: CarWorld
   private predict: Predict
   private sim: SimReconciler<GameInputLike, WorldPose, PredictedWorld> | undefined
@@ -198,7 +202,7 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     // Gamepad input is off by default in Phaser; this scene turns it on for itself. Scene settings
     // read `input` at runtime (scene/Settings.js), but Phaser 4's SettingsConfig type lacks it.
     const config: Types.Scenes.SettingsConfig & { input: { gamepad: boolean } } = {
-      key: 'CarRoquelikeGame', input: { gamepad: true },
+      key: 'CarRoquelikeMjsAxleGame', input: { gamepad: true },
     }
     super(config)
   }
@@ -653,7 +657,7 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   /** Leaving the game; in the sandbox, once everyone has, all cars respawn. Logged with its source. */
   private sendEscape(source: string) {
     if (this.dropped) return
-    console.info(`[car-roquelike] escape sent (${source})`)
+    console.info(`[car-roquelike-mjs-axle] escape sent (${source})`)
     this.room.send('escape')
   }
 

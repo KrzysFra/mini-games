@@ -1,6 +1,6 @@
 import { GameObjects } from 'phaser'
-import { DEFAULT_DOT_COLOR, MAX_PLAYERS_PER_ROOM } from '../../../shared/constants'
-import { textStyle, titleStyle } from '../../core/ui'
+import { DEFAULT_DOT_COLOR, MAX_PLAYERS_PER_ROOM } from '@shared/constants'
+import { textStyle, titleStyle } from '@core/ui'
 import { MiniGameParent } from '../MiniGameScene'
 
 /** The fields of the server's room state this scene reads. */

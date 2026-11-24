@@ -13,6 +13,8 @@ const clientReload: PluginOption = {
 
 export default defineConfig(({ mode }) => ({
   build: { outDir: "dist/client" },
+  // Resolve the `paths` aliases from tsconfig.json (@shared/*, @core/*).
+  resolve: { tsconfigPaths: true },
   server: {
     watch: { usePolling: true, interval: 100 }
   },

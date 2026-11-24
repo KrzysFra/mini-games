@@ -17,7 +17,11 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": false,
     "experimentalDecorators": true,
-    "useDefineForClassFields": false
+    "useDefineForClassFields": false,
+    "paths":{
+      "@shared/*": ["./src/shared/*"],
+      "@core/*": ["./src/client/core/*"],
+    }
   },
   "include": [
     "src",
