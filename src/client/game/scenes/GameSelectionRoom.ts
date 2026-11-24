@@ -81,8 +81,13 @@ export class GameSelectionRoom extends Scene {
     return this.state?.players.get(this.room.sessionId)
   }
 
+  /**
+   * The room state, once the first full state has arrived. Right after joining (or reconnecting),
+   * `room.state` is an empty instance until then: on a real network the scene starts first.
+   */
   get state(): RoomStateView | undefined {
-    return this.room.state as RoomStateView | undefined
+    const state = this.room.state as RoomStateView | undefined
+    return state?.players ? state : undefined
   }
 
   create() {

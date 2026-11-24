@@ -161,6 +161,10 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `NODE_ENV !== "production"`, and the client ignores `VITE_SANDBOX` outside `import.meta.env.DEV`.
 - Player names: `sanitizePlayerName` / `isValidPlayerName` in `src/shared/player-name.ts`
   (`NAME_MIN_LENGTH` / `NAME_MAX_LENGTH` in `shared/constants.ts`); the server re-sanitizes everything.
+- Right after `create`/`join`/`reconnect` resolves, `room.state` is an empty instance (fields undefined)
+  until the first full state arrives. Locally it arrives before the next scene starts, on a real network it
+  doesn't, so scenes' `state` getters return `undefined` until then (an exception in `create` kills the
+  Phaser loop: frozen screen).
 - Scenes must clean up on `destroy` as well as `shutdown`: Ctrl+←/→ destroys the whole game, which
   doesn't emit `shutdown`.
 - Don't `boot()` a second test server in one mocha run (matchmaking breaks); use `testServer()`.

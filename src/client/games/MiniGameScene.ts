@@ -27,8 +27,13 @@ export abstract class MiniGameParent<TState extends MiniGameParentInteface = Min
     super(config)
   }
 
+  /**
+   * The room state, once the first full state has arrived. Right after joining (e.g. sandbox mode
+   * starts the scene straight away), `room.state` is an empty instance until then.
+   */
   get state(): TState | undefined {
-    return this.room?.state as TState | undefined
+    const state = this.room?.state as TState | undefined
+    return state?.phase ? state : undefined
   }
 
   /** Build the game's objects. `this.room` is set. */
