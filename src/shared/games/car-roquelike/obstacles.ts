@@ -49,7 +49,7 @@ export const OBSTACLE_KINDS = {
 export type ObstacleKind = keyof typeof OBSTACLE_KINDS;
 
 /** Kinds in a fixed order, for rolling. */
-const KIND_LIST = Object.keys(OBSTACLE_KINDS) as ObstacleKind[];
+export const KIND_LIST = Object.keys(OBSTACLE_KINDS) as ObstacleKind[];
 
 /**
  * How often each kind spawns, by distance along the road from its start: a list of
@@ -62,7 +62,7 @@ const KIND_LIST = Object.keys(OBSTACLE_KINDS) as ObstacleKind[];
  * (At most one obstacle per segment: totals above 1 / `OBSTACLE_CHANCE` spawn no more.)
  * camera move: 48k per minute
  */
-export const OBSTACLE_WEIGHTS: [number, Partial<Record<ObstacleKind, number>>][] = [
+export const OBSTACLE_WEIGHTS: ObstacleWeights = [
   [0, { brown: 1 }],
   [25000, { brown: 2 }],
   [25000, { brown: .2, red: 1 }],
@@ -74,16 +74,30 @@ export const OBSTACLE_WEIGHTS: [number, Partial<Record<ObstacleKind, number>>][]
   [25000, { brown: 1, black: 1 }],
 ];
 
-/** `OBSTACLE_WEIGHTS`' entries at their absolute distance along the road (increasing). */
-const WEIGHT_STEPS = (() => {
-  let distance = 0;
-  return OBSTACLE_WEIGHTS.map(([offset, weights]) => ({ distance: distance += Math.max(0, offset), weights }));
-})();
+/**
+ * A weights table like `OBSTACLE_WEIGHTS`: `[distance, weights]` rows. A room's settings can replace
+ * the default one (`settings.ts`).
+ */
+export type ObstacleWeights = readonly (readonly [number, Partial<Record<ObstacleKind, number>>])[];
 
-/** A kind's weight (`OBSTACLE_WEIGHTS`) for an obstacle spawning `distance` along the road. */
-export function obstacleWeight(kind: ObstacleKind, distance: number): number {
-  let step = WEIGHT_STEPS[0];
-  for (const next of WEIGHT_STEPS) {
+/** A weights table's rows at their absolute distance along the road (increasing). */
+export type ObstacleWeightSteps = readonly { distance: number; weights: Partial<Record<ObstacleKind, number>>; }[];
+
+/** `weights`' rows at their absolute distance along the road (what `obstacleWeight` reads). */
+export function obstacleWeightSteps(weights: ObstacleWeights): ObstacleWeightSteps {
+  let distance = 0;
+  return weights.map(([offset, w]) => ({ distance: distance += Math.max(0, offset), weights: w }));
+}
+
+/** `OBSTACLE_WEIGHTS` as steps: what a world spawns with unless the room's settings say otherwise. */
+export const DEFAULT_OBSTACLE_WEIGHT_STEPS = obstacleWeightSteps(OBSTACLE_WEIGHTS);
+
+/** A kind's weight (by `steps`, a weights table) for an obstacle spawning `distance` along the road. */
+export function obstacleWeight(
+  kind: ObstacleKind, distance: number, steps: ObstacleWeightSteps = DEFAULT_OBSTACLE_WEIGHT_STEPS,
+): number {
+  let step = steps[0];
+  for (const next of steps) {
     if (next.distance > distance) break;
     step = next;
   }
@@ -124,9 +138,9 @@ export interface ObstacleSpawn extends ObstacleTraits {
 const scratchWeights: number[] = [];
 
 /** The total of the kinds' weights `distance` along the road (each kind's into `scratchWeights`). */
-function weightsAt(distance: number): number {
+function weightsAt(distance: number, steps: ObstacleWeightSteps): number {
   let total = 0;
-  for (let i = 0; i < KIND_LIST.length; i++) total += scratchWeights[i] = obstacleWeight(KIND_LIST[i], distance);
+  for (let i = 0; i < KIND_LIST.length; i++) total += scratchWeights[i] = obstacleWeight(KIND_LIST[i], distance, steps);
   return total;
 }
 
@@ -143,12 +157,15 @@ function kindForRoll(roll: number, total: number): ObstacleKind {
 }
 
 /**
- * The obstacle (if any) spawning in road segment `segment` of the road with seed `seed`.
- * Traits are float32-exact, as they are replicated (so server and clients use the same values).
+ * The obstacle (if any) spawning in road segment `segment` of the road with seed `seed`, by the
+ * spawn weights `steps`. Traits are float32-exact, as they are replicated (so server and clients
+ * use the same values).
  */
-export function rollObstacle(seed: number, segment: number): ObstacleSpawn | undefined {
+export function rollObstacle(
+  seed: number, segment: number, steps: ObstacleWeightSteps = DEFAULT_OBSTACLE_WEIGHT_STEPS,
+): ObstacleSpawn | undefined {
   const s = (segment + chunkHash(segment, seed, 11)) * OBSTACLE_SEGMENT;
-  const total = weightsAt(s);
+  const total = weightsAt(s, steps);
   if (chunkHash(segment, seed, 10) >= OBSTACLE_CHANCE * total) return undefined;
   const kind = kindForRoll(chunkHash(segment, seed, 14), total);
   const { minSpeed, maxSpeed } = OBSTACLE_KINDS[kind];

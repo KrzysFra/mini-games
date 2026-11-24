@@ -50,3 +50,33 @@ export const setButtonEnabled = (button: GameObjects.Container, enabled: boolean
 export const setButtonLabel = (button: GameObjects.Container, label: string) => {
   (button.list[1] as GameObjects.Text).setText(label)
 }
+
+/** Look of HTML inputs placed over the game (sizes in game pixels: the DOM container is game-sized). */
+export const htmlInputStyle: Partial<CSSStyleDeclaration> = {
+  height: '48px',
+  boxSizing: 'border-box',
+  padding: '0 12px',
+  font: '24px Arial',
+  color: '#ffffff',
+  background: '#262b2d',
+  border: '3px solid #000000',
+  outline: 'none',
+}
+
+/** An HTML button in the look of `createButton`, for HTML panels over the game. */
+export const createHtmlButton = (label: string, onClick: () => void) => {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.textContent = label
+  Object.assign(button.style, {
+    height: '48px',
+    padding: '0 20px',
+    font: '24px Arial',
+    color: '#ffffff',
+    background: '#' + COLOR_BUTTON.toString(16).padStart(6, '0'),
+    border: '3px solid #000000',
+    cursor: 'pointer',
+  })
+  button.addEventListener('click', () => { if (!button.disabled) onClick() })
+  return button
+}

@@ -23,20 +23,23 @@ src/server/            Colyseus server — app.config.ts (Vite serverEntry), roo
 src/client/            Phaser client — main.ts (entry, game switcher), core/ (shared client services)
 src/client/core/network.ts   the single shared Colyseus Client (same-origin endpoint)
 src/client/core/player-name.ts   player name persisted in localStorage (load/save, failure-safe)
-src/client/core/ui.ts   shared menu widgets: createButton / setButtonEnabled / setButtonLabel, textStyle, titleStyle
+src/client/core/ui.ts   shared menu widgets: createButton / setButtonEnabled / setButtonLabel, textStyle, titleStyle,
+                        HTML ones for panels over the game: createHtmlButton, htmlInputStyle
 src/client/core/sandbox.ts   `SANDBOX_GAME` from `VITE_SANDBOX` (dev only), see Sandbox mode in Notes
 src/client/core/session.ts   the game room the player is in (`currentRoom`), outlives scenes; keeps its
                              reconnection token in sessionStorage so the Lobby resumes it after a reload
 src/client/sandbox/    experiments & prototypes (examples/, pill-move/) — not real games
 src/client/game/scenes Lobby.ts (startup scene: connects to the `lobby` room, name input, live room list,
                        create/join), GameSelectionRoom.ts (after entering a room: leave/ready buttons, mini-game picker,
-                       8 player slots with ready state — all rendered from the room state)
+                       8 player slots with ready state — all rendered from the room state; gear button top right
+                       → SettingsPanel.ts, an HTML panel with the selected game's settings editor)
 src/client/games/      mini-game scenes: registry.ts (`MINI_GAMES` id → scene key + lazy `import()`),
                        MiniGameScene.ts (base: room handlers, back to selection/lobby),
+                       settings.ts (`MINI_GAMES` id → room settings editor; none = "No settings available"),
                        placeholder/PlaceholderGame.ts (one dot per player, any key → random color),
                        car-roquelike/ (see car-roquelike in Notes: CarRoquelikeGame.ts (the scene), RoadView.ts
                        (dirt + road pieces), DestructionView.ts (void + crumbling edge), playerInput.ts
-                       (keyboard/gamepad → `GameInput`), CpuDrivers.ts)
+                       (keyboard/gamepad → `GameInput`), CpuDrivers.ts, SettingsEditor.ts (obstacle weights table))
 src/server/games/      server side of mini-games that simulate: registry.ts (`MINI_GAMES` id → `ServerMiniGame`
                        factory), types.ts, car-roquelike/CarRoquelikeSim.ts (authoritative matter world)
 src/shared/games/      per-game shared code: car-roquelike/ (constants, controls.ts (input → `CarControls`),
@@ -46,7 +49,8 @@ src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join opti
 src/server/rooms/GameSelectionRoom.ts   the game room (type `my_room`): selection → playing
 src/server/rooms/SandboxRoom.ts   dev-only `sandbox` room (extends GameSelectionRoom)
 src/shared/            code used by BOTH sides: constants, player-name sanitizing, games.ts (`MINI_GAMES`
-                       list: car-roquelike first/default, then placeholders),
+                       list: car-roquelike first/default, then placeholders), game-settings.ts (per-game
+                       room settings sanitizers),
                        pure simulation logic
 public/                static assets (served at /, e.g. 'assets/block.png')
 test/                  server tests; all files share one booted server via `test/server.ts`
@@ -103,6 +107,13 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   and puts a display `title` ("<name>'s room") in its metadata — the listing's `name` is the room type.
 - Game selection room messages: `setReady` (boolean) and `selectGame` (a `MINI_GAMES` id; any player may
   switch, and switching resets everyone's `ready`). Both only apply while `phase` is `"selection"`.
+- Room settings (gear button): `state.gameSettings` maps a `MINI_GAMES` id → its settings as JSON
+  (missing = the game's defaults). `setGameSettings` (`{ game, settings }`, `settings: null` = defaults;
+  `"selection"` only) sanitizes via `shared/game-settings.ts` (ignored if invalid or the game has none) and
+  resets everyone's `ready`. A game gets settings with a sanitizer there plus an editor in
+  `client/games/settings.ts`. car-roquelike: `{ obstacleWeights }` (`games/car-roquelike/settings.ts`,
+  the `OBSTACLE_WEIGHTS` format, the default); the sim reads it at game start into `CarWorld.obstacleWeights`
+  (`obstacleWeightSteps`), and the HUD bar follows it (`obstacleWeightStepsFor`).
 - Room `phase`: `"selection"` → `"playing"` once every player is ready (checked on `setReady` and on leave).
   Clients follow it: GameSelectionRoom starts the selected game's scene via the registry (`car-roquelike` →
   `CarRoquelikeGame`, the placeholder entries → `PlaceholderGame`), which goes back if the phase returns to `"selection"`.
@@ -196,7 +207,7 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `color`, `minSpeed..maxSpeed`
   (each car's `speed` = throttle, rolled in it), `direction` (1 along the road, -1 the wrong way)
   `avoidsCars` and `playerAttackDistance` (> 0: rams a player car next to it, i.e. level with it along the road
-  (`ATTACK_ALONGSIDE`) and within that distance to its side, at its own speed, ahead of everything else; <= 0: never). How often each kind spawns: `OBSTACLE_WEIGHTS` (a list of `[distance, { kind → weight }]`, the distance relative to the previous entry's start, the first from the road's start; an entry applies from its start on, a step, not gradual, the last for good; a kind left out = 0). A weight is a spawn rate: a segment spawns with `OBSTACLE_CHANCE` × the total weight there (at most 1), its kind by share. The HUD shows the weights in use for spawning (the last segment rolled, followed client-side with `nextObstacleSegment`) as a vertical bar (top right, as wide as the total weight, kind colors, top to bottom in `OBSTACLE_KINDS` order).
+  (`ATTACK_ALONGSIDE`) and within that distance to its side, at its own speed, ahead of everything else; <= 0: never). How often each kind spawns: `OBSTACLE_WEIGHTS` (the default; the room's settings may replace it) (a list of `[distance, { kind → weight }]`, the distance relative to the previous entry's start, the first from the road's start; an entry applies from its start on, a step, not gradual, the last for good; a kind left out = 0). A weight is a spawn rate: a segment spawns with `OBSTACLE_CHANCE` × the total weight there (at most 1), its kind by share. The HUD shows the weights in use for spawning (the last segment rolled, followed client-side with `nextObstacleSegment`) as a vertical bar (top right, as wide as the total weight, kind colors, top to bottom in `OBSTACLE_KINDS` order).
   Every obstacle always drives at its own speed in its own `lane` (+ = right of
   the road's direction), aiming `OBSTACLE_LOOKAHEAD` along the road its way; it generates the road
   ahead of itself (`ensureRoad`), as it can outrun the road around the camera. `brown` (90%,

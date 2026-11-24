@@ -8,7 +8,8 @@ import { COUNTDOWN_TICKS, destructionFrontS, isDestroyed } from "./destruction.j
 import { driveCar } from "./handling.js";
 import { MAP_BLOCKS, spawnPoint, type SpawnPoint } from "./map.js";
 import {
-  lanePoint, MAX_OBSTACLES, OBSTACLE_KEEP_GAP, OBSTACLE_MAX_LANE, OBSTACLE_SEGMENT, obstacleInput, obstacleSpawnSpeed, rollObstacle, type ObstacleTraits,
+  lanePoint, MAX_OBSTACLES, OBSTACLE_KEEP_GAP, OBSTACLE_MAX_LANE, OBSTACLE_SEGMENT, obstacleInput, obstacleSpawnSpeed, rollObstacle,
+  DEFAULT_OBSTACLE_WEIGHT_STEPS, type ObstacleTraits, type ObstacleWeightSteps,
 } from "./obstacles.js";
 import {
   ensureRoadAround, getRoad, isOnRoad, pruneRoad, roadEnd, ROAD_RADIUS, START_STRAIGHT_LENGTH, type Road, type RoadSample,
@@ -54,6 +55,8 @@ export interface CarWorld {
   obstacles: Map<string, ObstacleCar>;
   /** The next road segment to roll for an obstacle (`spawnObstacles`; only the server spawns). */
   obstacleSegment: number;
+  /** How often each obstacle kind spawns along the road (the room's settings, else `OBSTACLE_WEIGHTS`). */
+  obstacleWeights: ObstacleWeightSteps;
 }
 
 /** The road a world starts with until the round sets its own. */
@@ -65,7 +68,7 @@ export function createCarWorld(road: Road = getRoad(DEFAULT_ROAD_SEED)): CarWorl
   Composite.add(engine.world, blocks);
   return {
     engine, cars: new Map(), seats: new Map(), road, frontS: 0, obstacles: new Map(),
-    obstacleSegment: FIRST_OBSTACLE_SEGMENT,
+    obstacleSegment: FIRST_OBSTACLE_SEGMENT, obstacleWeights: DEFAULT_OBSTACLE_WEIGHT_STEPS,
   };
 }
 
@@ -212,7 +215,7 @@ export function spawnObstacles(world: CarWorld, frontS: number, spawned: string[
     const segment = world.obstacleSegment;
     if (!isSegmentInReach(road, frontS, segment, center)) break;
 
-    const roll = rollObstacle(road.seed, segment);
+    const roll = rollObstacle(road.seed, segment, world.obstacleWeights);
     if (!roll || world.obstacles.size >= MAX_OBSTACLES) continue;
     // (Negative: the wrong way, facing back along the road)
     const speed = obstacleSpawnSpeed(roll);

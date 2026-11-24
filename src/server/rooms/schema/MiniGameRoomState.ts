@@ -84,6 +84,11 @@ export const GameSelectionRoomState = schema({
   /** Id of the mini-game picked in the selection room (one of `MINI_GAMES`). */
   selectedMiniGame: t.string().default(DEFAULT_MINI_GAME),
   players: t.map(Player),
+  /**
+   * Room settings per mini-game (`MINI_GAMES` id → JSON, sanitized by `shared/game-settings.ts`);
+   * a game without an entry uses its defaults. Changed with `setGameSettings` during selection.
+   */
+  gameSettings: t.map("string"),
   /** car-roquelike: one car per player (by sessionId) while the game runs. */
   cars: t.map(Car),
   /** car-roquelike: obstacle cars on the road, by id; cleared with each new round. */

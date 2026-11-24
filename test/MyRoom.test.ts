@@ -81,6 +81,35 @@ describe("testing your Colyseus app", () => {
     assert.strictEqual(room.state.selectedMiniGame, MINI_GAMES[1].id, "unknown ids are ignored");
   });
 
+  it("changes a game's settings (sanitized), resetting everyone's ready flag; null restores the defaults", async () => {
+    const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
+    const client1 = await colyseus.connectTo(room, { name: "Tester" });
+    await colyseus.connectTo(room, { name: "Tester2" });
+    client1.send("setReady", true);
+    await room.waitForNextMessage();
+    assert.strictEqual(room.state.phase, "selection");
+
+    client1.send("setGameSettings", {
+      game: "car-roquelike",
+      settings: { obstacleWeights: [[-5, { brown: 2, red: -1, nope: 3 }], [1000.4, { black: 99 }]] },
+    });
+    await room.waitForNextMessage();
+    assert.deepStrictEqual(JSON.parse(room.state.gameSettings.get("car-roquelike")),
+      { obstacleWeights: [[0, { brown: 2 }], [1000, { black: 10 }]] }, "clamped, unknown kinds dropped");
+    assert.strictEqual(room.state.players.get(client1.sessionId).ready, false);
+
+    client1.send("setGameSettings", { game: "car-roquelike", settings: { obstacleWeights: "lots" } });
+    await room.waitForNextMessage();
+    client1.send("setGameSettings", { game: "placeholder-1", settings: {} });
+    await room.waitForNextMessage();
+    assert.ok(room.state.gameSettings.has("car-roquelike"), "invalid settings are ignored");
+    assert.ok(!room.state.gameSettings.has("placeholder-1"), "games without settings take none");
+
+    client1.send("setGameSettings", { game: "car-roquelike", settings: null });
+    await room.waitForNextMessage();
+    assert.ok(!room.state.gameSettings.has("car-roquelike"), "back to the defaults");
+  });
+
   it("starts the game once every player is ready", async () => {
     const room = await colyseus.createRoom<GameSelectionRoomState>("my_room", {});
     const client1 = await colyseus.connectTo(room, { name: "Tester" });

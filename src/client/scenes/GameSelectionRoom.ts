@@ -1,10 +1,11 @@
-import { GameObjects, Scene } from 'phaser';
+import { GameObjects, Math as PhaserMath, Scene } from 'phaser';
 import type { Room } from '@colyseus/sdk';
 import { MAX_PLAYERS_PER_ROOM } from '@shared/constants';
 import { MINI_GAMES, miniGameIndex } from '@shared/games';
 import { currentRoom, leaveCurrentRoom } from '@core/session';
 import { createButton, setButtonEnabled, setButtonLabel, textStyle, titleStyle } from '@core/ui';
 import { loadMiniGameScene } from '../games/registry';
+import { SettingsPanel } from './SettingsPanel';
 
 /** The fields of the server's room state this scene reads. */
 interface PlayerView {
@@ -16,6 +17,8 @@ interface RoomStateView {
   phase: string;
   selectedMiniGame: string;
   players: Map<string, PlayerView>;
+  /** Room settings per mini-game (JSON by id; none = that game's defaults). */
+  gameSettings: Map<string, string>;
 }
 
 /** One of the player slots in the grid. */
@@ -44,6 +47,13 @@ const SLOT_GAP_X = 40;
 const SLOT_GAP_Y = 20;
 const SLOTS_TOP = 545;
 
+const GEAR_BUTTON_SIZE = 90;
+const GEAR_BUTTON_MARGIN = 40;
+const GEAR_TEETH = 8;
+const GEAR_OUTER_RADIUS = 30;
+const GEAR_ROOT_RADIUS = 22;
+const GEAR_HOLE_RADIUS = 9;
+
 const COLOR_PANEL = 0x3d464a;
 const COLOR_SLOT_EMPTY = 0x353d40;
 const COLOR_ARROW = 0x7d8f96;
@@ -65,6 +75,8 @@ export class GameSelectionRoom extends Scene {
   gameDescription: GameObjects.Text;
   gameCounter: GameObjects.Text;
   slots: Slot[] = [];
+  /** The selected game's settings, while open (the gear button). */
+  settingsPanel: SettingsPanel | undefined;
   /** The connection dropped and the SDK is trying to get it back; messages would be lost. */
   dropped = false;
   /** The selected mini-game's scene is being loaded; it starts once it is ready. */
@@ -112,6 +124,7 @@ export class GameSelectionRoom extends Scene {
     this.readyButton = this.add.existing(createButton(this, centerX + BUTTON_WIDTH / 2 + 20, BUTTONS_Y,
       BUTTON_WIDTH, BUTTON_HEIGHT, 'Ready', () => this.onToggleReady()));
     this.statusText = this.add.text(centerX, STATUS_Y, '', textStyle(26, '#d9776c')).setOrigin(0.5);
+    this.createGearButton(width - GEAR_BUTTON_MARGIN - GEAR_BUTTON_SIZE / 2, GEAR_BUTTON_MARGIN + GEAR_BUTTON_SIZE / 2);
 
     this.createGameSelection(centerX);
     this.createSlots(centerX);
@@ -133,10 +146,14 @@ export class GameSelectionRoom extends Scene {
       this.room.onReconnect.remove(onReconnect);
       this.room.onLeave.remove(onLeave);
     };
-    this.events.once('shutdown', this.removeRoomHandlers);
+    this.events.once('shutdown', () => {
+      this.removeRoomHandlers();
+      this.closeSettings();
+    });
     // Switching games (Ctrl+←/→) destroys the scene without a shutdown
     this.events.once('destroy', () => {
       this.removeRoomHandlers();
+      this.closeSettings();
       leaveCurrentRoom();
     });
 
@@ -166,6 +183,48 @@ export class GameSelectionRoom extends Scene {
     arrow.on('pointerover', () => arrow.setFillStyle(COLOR_ARROW_HOVER));
     arrow.on('pointerout', () => arrow.setFillStyle(COLOR_ARROW));
     arrow.on('pointerup', () => this.onCycleGame(direction));
+  }
+
+  /** Top right: a gear that opens the selected game's room settings. */
+  private createGearButton(x: number, y: number) {
+    const button = createButton(this, x, y, GEAR_BUTTON_SIZE, GEAR_BUTTON_SIZE, '', () => this.openSettings());
+    const gear = new GameObjects.Graphics(this);
+    const points: PhaserMath.Vector2[] = [];
+    const step = Math.PI * 2 / GEAR_TEETH;
+    // Each tooth: up from the root circle, across the top, back down (narrower at the top)
+    for (let i = 0; i < GEAR_TEETH; i++) {
+      const a = i * step;
+      for (const [radius, offset] of [[GEAR_ROOT_RADIUS, -0.3], [GEAR_OUTER_RADIUS, -0.18], [GEAR_OUTER_RADIUS, 0.18], [GEAR_ROOT_RADIUS, 0.3]]) {
+        points.push(new PhaserMath.Vector2(Math.cos(a + offset * step) * radius, Math.sin(a + offset * step) * radius));
+      }
+    }
+    gear.fillStyle(0xffffff).fillPoints(points, true)
+      .lineStyle(3, 0x000000).strokePoints(points, true)
+      .fillStyle(0x30373a).fillCircle(0, 0, GEAR_HOLE_RADIUS)
+      .strokeCircle(0, 0, GEAR_HOLE_RADIUS);
+    button.add(gear);
+    this.add.existing(button);
+  }
+
+  private openSettings() {
+    if (this.settingsPanel) return;
+    this.settingsPanel = new SettingsPanel(this.game.domContainer,
+      (game, settings) => { if (!this.dropped) this.room.send('setGameSettings', { game, settings }); },
+      () => this.closeSettings());
+    this.updateSettings();
+  }
+
+  private closeSettings() {
+    this.settingsPanel?.destroy();
+    this.settingsPanel = undefined;
+  }
+
+  /** Show the selected game's settings in the open panel. */
+  private updateSettings() {
+    const state = this.state;
+    if (!this.settingsPanel || !state) return;
+    const game = MINI_GAMES[miniGameIndex(state.selectedMiniGame)];
+    this.settingsPanel.update(game.id, game.title, state.gameSettings?.get(game.id));
   }
 
   /** `MAX_PLAYERS_PER_ROOM` slots, filled row by row in join order. */
@@ -219,6 +278,7 @@ export class GameSelectionRoom extends Scene {
     });
 
     this.refreshButtons();
+    this.updateSettings();
   }
 
   /** Load the mini-game's scene (lazily, the first time) and switch to it. */

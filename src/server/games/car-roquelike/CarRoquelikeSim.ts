@@ -7,6 +7,7 @@ import {
 } from "../../../shared/games/car-roquelike/physics.js";
 import { destructionFrontS } from "../../../shared/games/car-roquelike/destruction.js";
 import { buildRoad } from "../../../shared/games/car-roquelike/road.js";
+import { obstacleWeightStepsFor } from "../../../shared/games/car-roquelike/settings.js";
 import { WIN_FADE_TICKS, WIN_TEXT_TICKS } from "../../../shared/games/car-roquelike/constants.js";
 import {
   Car, ObstacleCar, type GameInput, type GameSelectionRoomState,
@@ -27,6 +28,8 @@ export class CarRoquelikeSim implements ServerMiniGame {
   private roundCars = 0;
 
   constructor(private state: GameSelectionRoomState) {
+    // The room's settings can only change during selection, so they hold for the whole game
+    this.world.obstacleWeights = obstacleWeightStepsFor(state.gameSettings.get("car-roquelike"));
     state.carRound = 0;
     state.carRoundTick = 0;
     this.clearWinner();

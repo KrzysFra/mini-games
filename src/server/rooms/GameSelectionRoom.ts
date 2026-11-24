@@ -1,5 +1,6 @@
 import { Client, CloseCode, Room } from "colyseus"
 import { DEFAULT_DOT_COLOR, INPUT_BUTTONS_MASK, MAX_PLAYERS_PER_ROOM, TICK_RATE } from "../../shared/constants.js"
+import { hasGameSettings, sanitizeGameSettings } from "../../shared/game-settings.js"
 import { isMiniGameId } from "../../shared/games.js"
 import { PHYSICS_SUBSTEPS } from "../../shared/games/car-roquelike/constants.js"
 import { isValidPlayerName, sanitizePlayerName } from "../../shared/player-name.js"
@@ -50,6 +51,29 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState, inp
       if (id === this.state.selectedMiniGame) { return }
 
       this.state.selectedMiniGame = id
+      for (const player of this.state.players.values()) {
+        player.ready = false
+      }
+    },
+
+    /**
+     * Change a mini-game's room settings: `{ game, settings }`, `settings: null` = back to its
+     * defaults. Sanitized here; invalid settings are ignored. Everyone's ready flag resets, since
+     * they agreed to the old settings.
+     */
+    setGameSettings: (client: Client, message: unknown) => {
+      if (this.state.phase !== "selection" || !this.state.players.has(client.sessionId)) { return }
+      const { game, settings } = (message ?? {}) as { game?: unknown, settings?: unknown }
+      if (!isMiniGameId(game) || !hasGameSettings(game)) { return }
+
+      if (settings === null) {
+        if (!this.state.gameSettings.has(game)) { return }
+        this.state.gameSettings.delete(game)
+      } else {
+        const json = sanitizeGameSettings(game, settings)
+        if (json === undefined || json === this.state.gameSettings.get(game)) { return }
+        this.state.gameSettings.set(game, json)
+      }
       for (const player of this.state.players.values()) {
         player.ready = false
       }

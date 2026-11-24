@@ -20,7 +20,7 @@ import {
 } from "../src/shared/games/car-roquelike/physics.js";
 import {
   lanePoint, MAX_OBSTACLES, OBSTACLE_KINDS, OBSTACLE_CHANCE, OBSTACLE_KEEP_GAP, OBSTACLE_SEGMENT,
-  obstacleWeight, rollObstacle, type ObstacleKind,
+  obstacleWeight, obstacleWeightSteps, rollObstacle, type ObstacleKind,
 } from "../src/shared/games/car-roquelike/obstacles.js";
 import { TICK_RATE } from "../src/shared/constants.js";
 
@@ -523,6 +523,26 @@ describe("car-roquelike physics", () => {
       // (A brown one that swerves too late may knock one about now and then)
       assert.ok(wrongWay > checked * 0.95, `the wrong way at its speed: ${wrongWay} of ${checked}`);
       assert.ok(inLane > checked * 0.95, `in its lane: ${inLane} of ${checked}`);
+    });
+
+    it("spawn by the world's own weights table (the room's settings)", () => {
+      const steps = obstacleWeightSteps([[0, {}], [20000, { red: 3 }]]);
+      for (let segment = 0; segment < 200; segment++) {
+        assert.strictEqual(rollObstacle(1234, segment, steps), undefined, "no weight: no spawns");
+      }
+      let reds = 0;
+      for (let segment = 200; segment < 2000; segment++) {
+        const roll = rollObstacle(1234, segment, steps);
+        if (roll) assert.strictEqual(roll.kind, "red");
+        if (roll) reds++;
+      }
+      assert.ok(reds > 1500, `weight 3: (nearly) every segment spawns, ${reds} of 1800`);
+
+      const world = createCarWorld(buildRoad(7));
+      world.obstacleWeights = obstacleWeightSteps([[0, {}]]);
+      const frontS = destructionFrontS(COUNTDOWN_TICKS);
+      maintainRoad(world, frontS);
+      assert.deepStrictEqual(spawnObstacles(world, frontS), [], "an all-zero table spawns nothing");
     });
 
     it("spawn on new road, past the first straight, heading their way along it at their own speed", () => {

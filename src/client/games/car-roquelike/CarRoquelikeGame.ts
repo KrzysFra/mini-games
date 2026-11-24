@@ -5,6 +5,7 @@ import { CAR_LENGTH, CAR_WIDTH, WIN_FADE_TICKS, WIN_TEXT_TICKS } from '@shared/g
 import { toCarInput, type CarInput, type GameInputLike } from '@shared/games/car-roquelike/controls'
 import { COUNTDOWN_TICKS, destructionFrontS } from '@shared/games/car-roquelike/destruction'
 import { MAP_BLOCKS } from '@shared/games/car-roquelike/map'
+import { obstacleWeightStepsFor } from '@shared/games/car-roquelike/settings'
 import { MAX_OBSTACLES, OBSTACLE_KINDS, OBSTACLE_SEGMENT, obstacleWeight, type ObstacleKind } from '@shared/games/car-roquelike/obstacles'
 import {
   addCar, addObstacle, createCarWorld, destroyCarWorld, FIRST_OBSTACLE_SEGMENT, maintainRoad, nextObstacleSegment,
@@ -48,6 +49,8 @@ interface RoomStateView {
   carWinnerName: string
   carWinTick: number
   roadSeed: number
+  /** Room settings per mini-game (JSON by id): ours sets the obstacle weights. */
+  gameSettings: Map<string, string>
 }
 
 /**
@@ -256,7 +259,8 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     // (Before any obstacle spawns: the weights the first ones will get)
     const distance = Math.max(this.weightSegment - 1, FIRST_OBSTACLE_SEGMENT) * OBSTACLE_SEGMENT
     const kinds = Object.keys(OBSTACLE_KINDS) as ObstacleKind[]
-    const weights = kinds.map(kind => obstacleWeight(kind, distance))
+    const steps = obstacleWeightStepsFor(this.state?.gameSettings?.get('car-roquelike'))
+    const weights = kinds.map(kind => obstacleWeight(kind, distance, steps))
     const key = weights.join()
     if (key === this.weightBarKey) return
     this.weightBarKey = key
