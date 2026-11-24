@@ -193,9 +193,11 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   straight is rolled once per `OBSTACLE_SEGMENT` (100) as it comes within `ROAD_RADIUS` of the camera,
   `OBSTACLE_CHANCE` (30%) each, from a hash of (seed, segment) (`rollObstacle`), at most `MAX_OBSTACLES`
   (48) at once, each in a pose slot. Kinds are one table, `OBSTACLE_KINDS` (tune there): per kind
-  `color`, `weight` (its share of spawns, relative to the others' weights), `minSpeed..maxSpeed`
+  `color`, `minSpeed..maxSpeed`
   (each car's `speed` = throttle, rolled in it), `direction` (1 along the road, -1 the wrong way)
-  and `avoidsCars`. Every obstacle always drives at its own speed in its own `lane` (+ = right of
+  `avoidsCars` and `playerAttackDistance` (> 0: rams a player car next to it, i.e. level with it along the road
+  (`ATTACK_ALONGSIDE`) and within that distance to its side, at its own speed, ahead of everything else; <= 0: never). How often each kind spawns: `OBSTACLE_WEIGHTS` ({ distance along the road → { kind → weight } }; an entry applies from its distance on, a step, not gradual; a kind left out = 0). A weight is a spawn rate: a segment spawns with `OBSTACLE_CHANCE` × the total weight there (at most 1), its kind by share. The HUD shows the weights in use for spawning (the last segment rolled, followed client-side with `nextObstacleSegment`) as a vertical bar (top right, as wide as the total weight, kind colors, top to bottom in `OBSTACLE_KINDS` order).
+  Every obstacle always drives at its own speed in its own `lane` (+ = right of
   the road's direction), aiming `OBSTACLE_LOOKAHEAD` along the road its way; it generates the road
   ahead of itself (`ensureRoad`), as it can outrun the road around the camera. `brown` (90%,
   0.5..0.9) avoids cars: it keeps `OBSTACLE_KEEP_GAP` (one car length) from every car, players' too,

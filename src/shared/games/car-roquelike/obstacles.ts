@@ -12,14 +12,9 @@ import { ensureRoad, roadDistanceAt, roadPointAt, type Road, type RoadSample } f
  * its car, its traits and the road, so clients predict obstacles exactly like the server runs them.
  */
 
-/** How an obstacle kind looks, how often it spawns, and how it drives. */
+/** How an obstacle kind looks and drives (how often it spawns: `OBSTACLE_WEIGHTS`). */
 export interface ObstacleKindConfig {
   color: number;
-  /**
-   * Share of spawned obstacles that are this kind, relative to the other kinds' (they needn't add
-   * up to 1: each kind gets weight / total of all weights).
-   */
-  weight: number;
   /** Speed range, as a share of top speed (each car gets its own, fixed, in the range). */
   minSpeed: number;
   maxSpeed: number;
@@ -27,6 +22,13 @@ export interface ObstacleKindConfig {
   direction: 1 | -1;
   /** Steers around other cars to keep `OBSTACLE_KEEP_GAP` (else it keeps to its lane regardless). */
   avoidsCars: boolean;
+  /**
+   * > 0: rams a player car that is next to it: level with it (along the road, centers at most
+   * `ATTACK_ALONGSIDE` apart) and at most this far to its side (center to center; the closest if
+   * several). At its own speed, leaving its lane and ignoring `avoidsCars` while the player is
+   * there. <= 0: never.
+   */
+  playerAttackDistance: number;
 }
 
 /**
@@ -35,16 +37,52 @@ export interface ObstacleKindConfig {
  */
 export const OBSTACLE_KINDS = {
   /** Follows the road in its lane, steering around other cars to keep a car length from them. */
-  brown: { color: 0x8a5a32, weight: 0.95, minSpeed: 0.5, maxSpeed: 0.9, direction: 1, avoidsCars: true },
+  brown: { color: 0x8a5a32, minSpeed: 0.5, maxSpeed: 0.9, direction: 1, avoidsCars: true, playerAttackDistance: 0 },
   /** Drives the wrong way, slowly, keeping to its lane whatever is in the way. */
-  red: { color: 0xc8302c, weight: 0.05, minSpeed: 0.4, maxSpeed: 0.4, direction: -1, avoidsCars: false },
+  red: { color: 0xc8302c, minSpeed: 0.2, maxSpeed: 0.4, direction: -1, avoidsCars: false, playerAttackDistance: 0 },
+  /** Drives the wrong way, quickly, actively avoiding other cars. */
+  orange: { color: 0xffa500, minSpeed: 0.8, maxSpeed: 0.8, direction: -1, avoidsCars: true, playerAttackDistance: 0 },
+  /** follows the road until a player comes to close and attacks them */
+  black: { color: 0x333333, minSpeed: 0.8, maxSpeed: 0.9, direction: 1, avoidsCars: true, playerAttackDistance: 200 },
 } satisfies Record<string, ObstacleKindConfig>;
 
 export type ObstacleKind = keyof typeof OBSTACLE_KINDS;
 
 /** Kinds in a fixed order, for rolling. */
 const KIND_LIST = Object.keys(OBSTACLE_KINDS) as ObstacleKind[];
-const TOTAL_WEIGHT = KIND_LIST.reduce((sum, kind) => sum + OBSTACLE_KINDS[kind].weight, 0);
+
+/**
+ * How often each kind spawns, by distance along the road from its start: each entry applies from
+ * its distance on (instantly), until the next one's. A weight is that kind's spawn rate, in units
+ * of `OBSTACLE_CHANCE` per segment: `{ brown: 1 }` spawns as many cars as `OBSTACLE_CHANCE`,
+ * `{ brown: 2 }` twice that, `{ brown: 0.75, red: 0.75 }` 1.5 times that, half of each. A kind
+ * left out of an entry doesn't spawn there. The lowest entry also applies before its distance.
+ * (At most one obstacle per segment: totals above 1 / `OBSTACLE_CHANCE` spawn no more.)
+ * camera move: 48k per minute
+ */
+export const OBSTACLE_WEIGHTS: Record<number, Partial<Record<ObstacleKind, number>>> = {
+  0: { brown: 1 },
+  // 0: { brown: 1, black: .2 },
+  24000: { brown: 2 },
+  48000: { brown: 1, red: .3 },
+  62000: { orange: 2 },
+  66800: { brown: 1, black: .2 },
+};
+
+/** `OBSTACLE_WEIGHTS`' entries by increasing distance. */
+const WEIGHT_STEPS = Object.entries(OBSTACLE_WEIGHTS)
+  .map(([distance, weights]) => ({ distance: Number(distance), weights }))
+  .sort((a, b) => a.distance - b.distance);
+
+/** A kind's weight (`OBSTACLE_WEIGHTS`) for an obstacle spawning `distance` along the road. */
+export function obstacleWeight(kind: ObstacleKind, distance: number): number {
+  let step = WEIGHT_STEPS[0];
+  for (const next of WEIGHT_STEPS) {
+    if (next.distance > distance) break;
+    step = next;
+  }
+  return Math.max(0, step?.weights[kind] ?? 0);
+}
 
 /** A kind's config (unknown kinds, e.g. from a newer server, drive like brown). */
 export const obstacleKind = (kind: string): ObstacleKindConfig =>
@@ -52,7 +90,7 @@ export const obstacleKind = (kind: string): ObstacleKindConfig =>
 
 /** Road is rolled for obstacles in segments of this length... */
 export const OBSTACLE_SEGMENT = 100;
-/** ...each spawning one with this chance (its kind is then rolled by `weight`). */
+/** ...each spawning one with this chance per 1 of total weight there (`OBSTACLE_WEIGHTS`). */
 export const OBSTACLE_CHANCE = 0.3;
 /** Most obstacles in the world at once (clients draw them from fixed pose slots, one per obstacle). */
 export const MAX_OBSTACLES = 48;
@@ -77,14 +115,25 @@ export interface ObstacleSpawn extends ObstacleTraits {
   s: number;
 }
 
-/** The kind for a roll of 0..1, by weight. */
-function kindForRoll(roll: number): ObstacleKind {
-  let at = roll * TOTAL_WEIGHT;
-  for (const kind of KIND_LIST) {
-    at -= OBSTACLE_KINDS[kind].weight;
-    if (at < 0) return kind;
+const scratchWeights: number[] = [];
+
+/** The total of the kinds' weights `distance` along the road (each kind's into `scratchWeights`). */
+function weightsAt(distance: number): number {
+  let total = 0;
+  for (let i = 0; i < KIND_LIST.length; i++) total += scratchWeights[i] = obstacleWeight(KIND_LIST[i], distance);
+  return total;
+}
+
+/** The kind for a roll of 0..1, by the weights last put in `scratchWeights` (`weightsAt`), totalling `total`. */
+function kindForRoll(roll: number, total: number): ObstacleKind {
+  let at = roll * total;
+  for (let i = 0; i < KIND_LIST.length; i++) {
+    at -= scratchWeights[i];
+    if (at < 0) return KIND_LIST[i];
   }
-  return KIND_LIST[KIND_LIST.length - 1];
+  // (Rounding, or every weight 0 here: the last kind with any weight, else the first)
+  for (let i = KIND_LIST.length - 1; i >= 0; i--) if (scratchWeights[i] > 0) return KIND_LIST[i];
+  return KIND_LIST[0];
 }
 
 /**
@@ -92,12 +141,14 @@ function kindForRoll(roll: number): ObstacleKind {
  * Traits are float32-exact, as they are replicated (so server and clients use the same values).
  */
 export function rollObstacle(seed: number, segment: number): ObstacleSpawn | undefined {
-  if (chunkHash(segment, seed, 10) >= OBSTACLE_CHANCE) return undefined;
-  const kind = kindForRoll(chunkHash(segment, seed, 14));
+  const s = (segment + chunkHash(segment, seed, 11)) * OBSTACLE_SEGMENT;
+  const total = weightsAt(s);
+  if (chunkHash(segment, seed, 10) >= OBSTACLE_CHANCE * total) return undefined;
+  const kind = kindForRoll(chunkHash(segment, seed, 14), total);
   const { minSpeed, maxSpeed } = OBSTACLE_KINDS[kind];
   return {
     kind,
-    s: (segment + chunkHash(segment, seed, 11)) * OBSTACLE_SEGMENT,
+    s,
     speed: Math.fround(minSpeed + chunkHash(segment, seed, 12) * (maxSpeed - minSpeed)),
     lane: Math.fround((chunkHash(segment, seed, 13) * 2 - 1) * OBSTACLE_MAX_LANE),
   };
@@ -123,11 +174,15 @@ const DODGE_MAX_LANE = ROAD_WIDTH / 2 - CAR_WIDTH;
 const DODGE_TIME = 25;
 /** Other cars further than this (center to center) are ignored. */
 const AWARE_RANGE = 600;
+/** Most steps ahead an attacking obstacle leads its target by (aiming where it will be). */
+const ATTACK_LEAD_MAX = 30;
+/** A player counts as next to an obstacle (`playerAttackDistance`) this far ahead or behind it, at most. */
+export const ATTACK_ALONGSIDE = CAR_LENGTH;
 
 /** The parts of a car body an obstacle looks at (a matter body fits). */
 export interface CarBodyLike {
-  position: { x: number; y: number };
-  velocity: { x: number; y: number };
+  position: { x: number; y: number; };
+  velocity: { x: number; y: number; };
 }
 
 const scratchTarget: RoadSample = { x: 0, y: 0, heading: 0, s: 0 };
@@ -137,7 +192,55 @@ const NO_CARS: readonly CarBodyLike[] = [];
 const oncoming: number[] = [];
 
 /**
- * An obstacle's input for this step, by its kind (`OBSTACLE_KINDS`). Always at its own share of top
+ * The closest of `players` next to `self`: in the frame (`fx`, `fy`) forward, at most
+ * `ATTACK_ALONGSIDE` ahead or behind and `range` to either side. None: undefined.
+ */
+function playerAlongside(
+  self: CarBodyLike, players: Iterable<CarBodyLike>, fx: number, fy: number, range: number,
+): CarBodyLike | undefined {
+  let closest: CarBodyLike | undefined;
+  let closestSide = range;
+  for (const player of players) {
+    const rx = player.position.x - self.position.x;
+    const ry = player.position.y - self.position.y;
+    if (Math.abs(rx * fx + ry * fy) > ATTACK_ALONGSIDE) continue;
+    const side = Math.abs(rx * -fy + ry * fx);
+    if (side <= closestSide) {
+      closest = player;
+      closestSide = side;
+    }
+  }
+  return closest;
+}
+
+/**
+ * Ram `target`: at its own speed (`speed`, the throttle), straight at where the target will be
+ * when this car gets there (led by its velocity, at most `ATTACK_LEAD_MAX` steps, at the speed
+ * they close in or this car's own).
+ */
+function attackInput(self: CarBodyLike, target: CarBodyLike, speed: number, out: CarInput): CarInput {
+  const rx = target.position.x - self.position.x;
+  const ry = target.position.y - self.position.y;
+  const distance = Math.hypot(rx, ry);
+  const ownSpeed = Math.hypot(self.velocity.x, self.velocity.y);
+  // How fast they close in along the line between them
+  const closing = distance > 1e-6
+    ? ((self.velocity.x - target.velocity.x) * rx + (self.velocity.y - target.velocity.y) * ry) / distance
+    : 0;
+  const lead = clamp(distance / Math.max(closing, ownSpeed, 1), 0, ATTACK_LEAD_MAX);
+  const dx = rx + target.velocity.x * lead;
+  const dy = ry + target.velocity.y * lead;
+  const length = Math.hypot(dx, dy) || 1;
+  out.dirX = (dx / length) * speed;
+  out.dirY = (dy / length) * speed;
+  out.handbrake = false;
+  return out;
+}
+
+/**
+ * An obstacle's input for this step, by its kind (`OBSTACLE_KINDS`). A kind with a
+ * `playerAttackDistance` > 0 rams a player next to it (`playerAlongside`, `attackInput`), whatever
+ * else. Otherwise always at its own share of top
  * speed, aiming at its lane `OBSTACLE_LOOKAHEAD` along the road its way (`direction`: along the road,
  * or the wrong way) from where it is (knocked off the road, it steers back). A kind that
  * `avoidsCars` (brown) also steers to keep `OBSTACLE_KEEP_GAP` from every other car (`others`;
@@ -151,6 +254,7 @@ const oncoming: number[] = [];
  */
 export function obstacleInput(
   road: Road, frontS: number, self: CarBodyLike, traits: ObstacleTraits, others: Iterable<CarBodyLike>,
+  players: Iterable<CarBodyLike> = NO_CARS,
   out: CarInput = { dirX: 0, dirY: 0, handbrake: false },
 ): CarInput {
   const { x, y } = self.position;
@@ -161,10 +265,14 @@ export function obstacleInput(
 
   // The road's frame here, turned the way it drives: forward, and to its right. Lanes below are in
   // it (a wrong-way car's right is the road's left)
-  const { direction, avoidsCars } = obstacleKind(traits.kind);
+  const { direction, avoidsCars, playerAttackDistance } = obstacleKind(traits.kind);
   const here = roadPointAt(road, s, scratchHere);
   const fx = Math.cos(here.heading) * direction;
   const fy = Math.sin(here.heading) * direction;
+  if (playerAttackDistance > 0) {
+    const target = playerAlongside(self, players, fx, fy, playerAttackDistance);
+    if (target) return attackInput(self, target, traits.speed, out);
+  }
   const ownSpeed = self.velocity.x * fx + self.velocity.y * fy;
   const ownLane = (x - here.x) * -fy + (y - here.y) * fx;
   const homeLane = traits.lane * direction;

@@ -160,7 +160,7 @@ export function clearObstacles(world: CarWorld): void {
 }
 
 /** Obstacles spawn after the first straight (the running start's). */
-const FIRST_OBSTACLE_SEGMENT = Math.ceil(START_STRAIGHT_LENGTH / OBSTACLE_SEGMENT);
+export const FIRST_OBSTACLE_SEGMENT = Math.ceil(START_STRAIGHT_LENGTH / OBSTACLE_SEGMENT);
 /** Obstacles only spawn this far before the end of the road in play (they aim further along it). */
 const SPAWN_END_MARGIN = 500;
 /** No obstacle spawns this close to another car. */
@@ -180,6 +180,24 @@ const scratchSpawn: RoadSample = { x: 0, y: 0, heading: 0, s: 0 };
 const scratchCenter: RoadSample = { x: 0, y: 0, heading: 0, s: 0 };
 
 /**
+ * The first obstacle segment from `segment` on that isn't in spawn reach yet with the front at
+ * `frontS` (= `segment` if it isn't): every segment before it has been rolled (`spawnObstacles`).
+ * Pure, so clients can follow the spawning (e.g. to show the weights in use) without spawning.
+ */
+export function nextObstacleSegment(road: Road, frontS: number, segment: number): number {
+  const center = cameraCenter(road, frontS, scratchCenter);
+  for (; ; segment++) if (!isSegmentInReach(road, frontS, segment, center)) return segment;
+}
+
+/** Whether obstacle segment `segment` is due to be rolled (on road in play, near the camera). */
+function isSegmentInReach(road: Road, frontS: number, segment: number, center: RoadSample): boolean {
+  const segmentEnd = (segment + 1) * OBSTACLE_SEGMENT;
+  if (segmentEnd > roadEnd(road, frontS) - SPAWN_END_MARGIN) return false;
+  const end = lanePoint(road, segmentEnd, 0, scratchSpawn);
+  return Math.hypot(end.x - center.x, end.y - center.y) <= ROAD_RADIUS;
+}
+
+/**
  * Server only (clients adopt obstacles from the state): spawn obstacles on the road that has come
  * within `ROAD_RADIUS` of the camera since the last call (new road), with the front at `frontS`.
  * Each `OBSTACLE_SEGMENT` of road is rolled once (`rollObstacle`): it spawns in its lane, heading
@@ -192,10 +210,7 @@ export function spawnObstacles(world: CarWorld, frontS: number, spawned: string[
   const center = cameraCenter(road, frontS, scratchCenter);
   for (; ; world.obstacleSegment++) {
     const segment = world.obstacleSegment;
-    const segmentEnd = (segment + 1) * OBSTACLE_SEGMENT;
-    if (segmentEnd > roadEnd(road, frontS) - SPAWN_END_MARGIN) break;
-    const end = lanePoint(road, segmentEnd, 0, scratchSpawn);
-    if (Math.hypot(end.x - center.x, end.y - center.y) > ROAD_RADIUS) break;
+    if (!isSegmentInReach(road, frontS, segment, center)) break;
 
     const roll = rollObstacle(road.seed, segment);
     if (!roll || world.obstacles.size >= MAX_OBSTACLES) continue;
@@ -272,6 +287,7 @@ const scratchControls: CarControls = { steer: 0, throttle: 0, brake: false, hand
 const scratchInput: CarInput = { ...NEUTRAL_INPUT };
 const scratchRemoved: string[] = [];
 const scratchBodies: Matter.Body[] = [];
+const scratchPlayers: Matter.Body[] = [];
 const NO_INPUTS: ReadonlyMap<string, CarInput> = new Map();
 /** Reused by `addCar` / `stepCarRound` (single-threaded, never kept). */
 const scratchPose: CarSnapshot = { x: 0, y: 0, angle: 0, vx: 0, vy: 0, av: 0 };
@@ -295,8 +311,11 @@ export function stepCarWorld(
   // Engine.update, so each one sees the same positions and velocities whatever the order)
   const bodies = scratchBodies;
   bodies.length = 0;
+  // The players' cars (eliminated ones are removed), for the obstacles that attack them
+  const players = scratchPlayers;
+  players.length = 0;
   if (world.obstacles.size > 0) {
-    for (const body of world.cars.values()) bodies.push(body);
+    for (const body of world.cars.values()) bodies.push(body), players.push(body);
     for (const obstacle of world.obstacles.values()) bodies.push(obstacle.body);
   }
   for (let i = 0; i < subSteps; i++) {
@@ -307,7 +326,7 @@ export function stepCarWorld(
     }
     for (const obstacle of world.obstacles.values()) {
       const { body } = obstacle;
-      const input = obstacleInput(road, frontS, body, obstacle, bodies, scratchInput);
+      const input = obstacleInput(road, frontS, body, obstacle, bodies, players, scratchInput);
       driveCar(body, resolveCarControls(body.angle, input, scratchControls), topSpeed(body), subDtMs);
     }
     Engine.update(world.engine, subDtMs);

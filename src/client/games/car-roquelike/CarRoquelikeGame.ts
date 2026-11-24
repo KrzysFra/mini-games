@@ -5,10 +5,10 @@ import { CAR_LENGTH, CAR_WIDTH, WIN_FADE_TICKS, WIN_TEXT_TICKS } from '@shared/g
 import { toCarInput, type CarInput, type GameInputLike } from '@shared/games/car-roquelike/controls'
 import { COUNTDOWN_TICKS, destructionFrontS } from '@shared/games/car-roquelike/destruction'
 import { MAP_BLOCKS } from '@shared/games/car-roquelike/map'
-import { MAX_OBSTACLES, OBSTACLE_KINDS, type ObstacleKind } from '@shared/games/car-roquelike/obstacles'
+import { MAX_OBSTACLES, OBSTACLE_KINDS, OBSTACLE_SEGMENT, obstacleWeight, type ObstacleKind } from '@shared/games/car-roquelike/obstacles'
 import {
-  addCar, addObstacle, createCarWorld, destroyCarWorld, maintainRoad, removeCar, removeObstacle, stepCarRound,
-  useRoadSeed, writeCar, type CarSnapshot, type CarWorld,
+  addCar, addObstacle, createCarWorld, destroyCarWorld, FIRST_OBSTACLE_SEGMENT, maintainRoad, nextObstacleSegment,
+  removeCar, removeObstacle, stepCarRound, useRoadSeed, writeCar, type CarSnapshot, type CarWorld,
 } from '@shared/games/car-roquelike/physics'
 import { CAMERA_ZOOM, cameraCenter } from '@shared/games/car-roquelike/camera'
 import { SANDBOX_GAME, SANDBOX_ROOM } from '@core/sandbox'
@@ -85,6 +85,14 @@ const SNAP_DISTANCE = 500
 /** The world fades in from black this long (ms) at the start of a round, into the running start. */
 const FADE_IN_MS = 1200
 /**
+ * The obstacle weights bar (HUD, top right, vertical): size, corner radius, distance from the
+ * screen edges. Its width is per 1 of total weight (the spawn rate): it widens to the left.
+ */
+const WEIGHT_BAR_WIDTH = 28
+const WEIGHT_BAR_HEIGHT = 360
+const WEIGHT_BAR_RADIUS = 12
+const WEIGHT_BAR_MARGIN = 24
+/**
  * After a win, the world fades to black this long (ms): a little under the server's
  * `WIN_FADE_TICKS`, so it's black by the time the next round starts.
  */
@@ -145,6 +153,13 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   /** Sandbox only: CPU drivers hosted by this tab (extra connections that drive like players). */
   private cpuDrivers: CpuDrivers | undefined
   private keys: ReturnType<typeof addDriveKeys>
+  /** HUD bar (top right): the obstacle kinds' current share of spawns (`OBSTACLE_WEIGHTS`). */
+  private weightBar: GameObjects.Graphics
+  /** The weights the bar was last drawn for (redrawn only when they change). */
+  private weightBarKey: string | undefined
+  /** The server's obstacle spawning, followed here: the next segment to roll, on road `weightSeed`. */
+  private weightSegment = FIRST_OBSTACLE_SEGMENT
+  private weightSeed: number | undefined
 
   constructor() {
     // Gamepad input is off by default in Phaser; this scene turns it on for itself. Scene settings
@@ -219,6 +234,57 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     this.winText = this.add.text(width / 2, height / 2 - 160, '',
       { ...textStyle(110, '#e0c068'), stroke: '#000000', strokeThickness: 12 }).setOrigin(0.5)
     this.uiLayer.add([this.statusText, help, this.padText, this.countdownText, this.eliminatedText, this.winText])
+
+    this.weightBar = this.add.graphics()
+    this.weightBarKey = undefined
+    this.weightSegment = FIRST_OBSTACLE_SEGMENT
+    this.weightSeed = undefined
+    this.uiLayer.add(this.weightBar)
+  }
+
+  /**
+   * The obstacle weights in use for spawning right now, as a bar: at the last segment rolled
+   * (followed with `nextObstacleSegment`, like the server's `spawnObstacles`, at our front).
+   */
+  private updateWeightBar(frontS: number) {
+    const road = this.carWorld.road
+    if (road.seed !== this.weightSeed) {
+      this.weightSeed = road.seed
+      this.weightSegment = FIRST_OBSTACLE_SEGMENT
+    }
+    this.weightSegment = nextObstacleSegment(road, frontS, this.weightSegment)
+    // (Before any obstacle spawns: the weights the first ones will get)
+    const distance = Math.max(this.weightSegment - 1, FIRST_OBSTACLE_SEGMENT) * OBSTACLE_SEGMENT
+    const kinds = Object.keys(OBSTACLE_KINDS) as ObstacleKind[]
+    const weights = kinds.map(kind => obstacleWeight(kind, distance))
+    const key = weights.join()
+    if (key === this.weightBarKey) return
+    this.weightBarKey = key
+
+    const total = weights.reduce((sum, w) => sum + w, 0)
+    const bar = this.weightBar.clear()
+    // As wide as the spawn rate (nothing spawning: no bar)
+    const barWidth = total * WEIGHT_BAR_WIDTH
+    if (barWidth <= 0) return
+    const x0 = this.scale.width - WEIGHT_BAR_MARGIN - barWidth
+    const y0 = WEIGHT_BAR_MARGIN
+    const bottom = y0 + WEIGHT_BAR_HEIGHT
+    const radius = Math.min(WEIGHT_BAR_RADIUS, barWidth / 2)
+    bar.fillStyle(0x000000, 0.5).fillRoundedRect(x0, y0, barWidth, WEIGHT_BAR_HEIGHT, radius)
+    // Kinds top to bottom. Each one is filled from its top down to the bar's bottom (the next ones
+    // paint over the rest), so only the first needs rounded top corners and all share the bottom's.
+    let y = y0
+    let first = true
+    kinds.forEach((kind, i) => {
+      const height = total > 0 ? weights[i] / total * WEIGHT_BAR_HEIGHT : 0
+      if (height <= 0) return
+      const r = Math.min(radius, (bottom - y) / 2)
+      bar.fillStyle(OBSTACLE_KINDS[kind].color, 1)
+        .fillRoundedRect(x0, y, barWidth, bottom - y, { tl: first ? r : 0, tr: first ? r : 0, bl: r, br: r })
+      first = false
+      y += height
+    })
+    bar.lineStyle(4, 0x000000, 1).strokeRoundedRect(x0, y0, barWidth, WEIGHT_BAR_HEIGHT, radius)
   }
 
   /** Start predicting (our car, and the others with it) once the server has given us a car. */
@@ -404,6 +470,7 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
       this.positionObstacles(state, pose)
       this.positionCars(state, pose, roundTick < COUNTDOWN_TICKS && Math.floor(time / OWN_BLINK_MS) % 2 === 1)
       this.updateCamera(frontS)
+      this.updateWeightBar(frontS)
     }
     const view = this.cameras.main.worldView
     this.roadView.updateView(view)

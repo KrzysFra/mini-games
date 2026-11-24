@@ -20,7 +20,7 @@ import {
 } from "../src/shared/games/car-roquelike/physics.js";
 import {
   lanePoint, MAX_OBSTACLES, OBSTACLE_KINDS, OBSTACLE_CHANCE, OBSTACLE_KEEP_GAP, OBSTACLE_SEGMENT,
-  rollObstacle,
+  obstacleWeight, rollObstacle, type ObstacleKind,
 } from "../src/shared/games/car-roquelike/obstacles.js";
 import { TICK_RATE } from "../src/shared/constants.js";
 
@@ -467,27 +467,34 @@ describe("car-roquelike physics", () => {
       return world;
     };
 
-    it("are rolled per 100 of road, 30% of the time, each kind by its weight and in its speed range", () => {
+    it("are rolled per 100 of road, 30% of the time per 1 of weight, each kind by its weight and in its speed range", () => {
       let spawns = 0;
+      // Expected spawns: the chance scales with the total weight (at the segment's middle: close enough)
+      let expectedSpawns = 0;
       const byKind = new Map<string, number>();
+      // Each spawn's chance of each kind, by the weights where it spawned (they may vary with distance)
+      const names = Object.keys(OBSTACLE_KINDS) as ObstacleKind[];
+      const expected = new Map<string, number>();
       const segments = 40_000;
       for (let segment = 0; segment < segments; segment++) {
+        const middle = (segment + 0.5) * OBSTACLE_SEGMENT;
+        expectedSpawns += Math.min(1, OBSTACLE_CHANCE * names.reduce((sum, name) => sum + obstacleWeight(name, middle), 0));
         const roll = rollObstacle(1234, segment);
         if (!roll) continue;
         spawns++;
         byKind.set(roll.kind, (byKind.get(roll.kind) ?? 0) + 1);
+        const total = names.reduce((sum, name) => sum + obstacleWeight(name, roll.s), 0);
+        for (const name of names) expected.set(name, (expected.get(name) ?? 0) + obstacleWeight(name, roll.s) / total);
         const { minSpeed, maxSpeed } = OBSTACLE_KINDS[roll.kind];
         assert.ok(roll.speed >= Math.fround(minSpeed) && roll.speed <= Math.fround(maxSpeed), `${roll.kind} speed ${roll.speed}`);
         assert.ok(roll.s >= segment * OBSTACLE_SEGMENT && roll.s < (segment + 1) * OBSTACLE_SEGMENT, "in its segment");
         assert.ok(Math.abs(roll.lane) < ROAD_WIDTH / 2 - CAR_WIDTH, "in a lane on the road");
         assert.deepStrictEqual(rollObstacle(1234, segment), roll, "deterministic");
       }
-      assert.ok(Math.abs(spawns / segments - OBSTACLE_CHANCE) < 0.02, `${spawns} of ${segments}`);
-      const kinds = Object.entries(OBSTACLE_KINDS);
-      const totalWeight = kinds.reduce((sum, [, kind]) => sum + kind.weight, 0);
-      for (const [name, kind] of kinds) {
+      assert.ok(Math.abs(spawns - expectedSpawns) / segments < 0.02, `${spawns} of ${segments}, expected ${expectedSpawns.toFixed(0)}`);
+      for (const name of names) {
         const share = (byKind.get(name) ?? 0) / spawns;
-        assert.ok(Math.abs(share - kind.weight / totalWeight) < 0.02, `${name}: ${(share * 100).toFixed(1)}% of spawns`);
+        assert.ok(Math.abs(share - expected.get(name) / spawns) < 0.02, `${name}: ${(share * 100).toFixed(1)}% of spawns`);
       }
     });
 
@@ -647,6 +654,59 @@ describe("car-roquelike physics", () => {
         const endS = roadDistanceAt(world.road, body.position.x, body.position.y, frontS);
         assert.ok(endS > parkedAt.s + 2 * CAR_LENGTH, `seed ${seed}: passed it (${endS.toFixed(0)} vs ${parkedAt.s.toFixed(0)})`);
         assert.ok(isOnRoad(world.road, body.position.x, body.position.y, frontS), `seed ${seed}: back on the road`);
+      }
+    });
+
+    it("with a playerAttackDistance ram a player next to them, at their own speed, and not one ahead", () => {
+      const kind = OBSTACLE_KINDS.brown;
+      const saved = kind.playerAttackDistance;
+      kind.playerAttackDistance = 200;
+      /** One obstacle alone with a player driving along the road at its speed, `ahead` of it and `aside`. */
+      const scene = (seed: number, ahead: number, aside: number) => {
+        const { world, frontS } = worldWithObstacles(seed);
+        world.frontS = frontS;
+        const [id, obstacle] = [...world.obstacles][0];
+        for (const other of [...world.obstacles.keys()]) if (other !== id) removeObstacle(world, other);
+        obstacle.kind = "brown";
+        const { body } = obstacle;
+        const startS = roadDistanceAt(world.road, body.position.x, body.position.y, frontS);
+        const lane = obstacle.lane + (obstacle.lane > 0 ? -aside : aside);
+        const at = lanePoint(world.road, startS + ahead, lane);
+        const v = obstacle.speed * CAR_MAX_SPEED;
+        const player = addCar(world, "a", 0, {
+          x: at.x, y: at.y, angle: at.heading, vx: Math.cos(at.heading) * v, vy: Math.sin(at.heading) * v, av: 0,
+        });
+        let hit = false;
+        Matter.Events.on(world.engine, "collisionStart", e => {
+          for (const pair of e.pairs) {
+            if ((pair.bodyA === body || pair.bodyB === body) && (pair.bodyA === player || pair.bodyB === player)) hit = true;
+          }
+        });
+        let fastest = 0;
+        const drive = (ticks: number) => {
+          for (let tick = 0; tick < ticks && !hit; tick++) {
+            const ps = roadDistanceAt(world.road, player.position.x, player.position.y, frontS);
+            const heading = roadPointAt(world.road, ps).heading;
+            step(world, new Map([["a", toward(Math.cos(heading) * obstacle.speed, Math.sin(heading) * obstacle.speed)]]), 1);
+            fastest = Math.max(fastest, Math.hypot(body.velocity.x, body.velocity.y));
+          }
+        };
+        return { obstacle, drive, hit: () => hit, fastest: () => fastest };
+      };
+      try {
+        for (const seed of [5, 9, 11]) {
+          const alongside = scene(seed, 0, 120);
+          alongside.drive(2 * TICK_RATE);
+          assert.ok(alongside.hit(), `seed ${seed}: rammed the player next to it`);
+          const target = alongside.obstacle.speed * CAR_MAX_SPEED;
+          assert.ok(alongside.fastest() < target * 1.05, `seed ${seed}: at its own speed (${alongside.fastest().toFixed(2)} vs ${target.toFixed(2)})`);
+
+          const ahead = scene(seed, 150, 0);
+          ahead.drive(2 * TICK_RATE);
+          assert.ok(!ahead.hit(), `seed ${seed}: left the player ahead alone`);
+        }
+      } finally {
+        kind.playerAttackDistance = saved;
       }
     });
   });
