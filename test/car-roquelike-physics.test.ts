@@ -12,7 +12,7 @@ import {
   ROAD_KEEP_BEHIND, START_STRAIGHT_LENGTH, STRAIGHT_MAX_LENGTH, STRAIGHT_MIN_LENGTH, type Road,
 } from "../src/shared/games/car-roquelike/road.js";
 import {
-  addCar, createCarWorld, destroyCarWorld, readCar, resolveCarControls, stepCarRound, stepCarWorld, writeCar,
+  addCar, carSlip, createCarWorld, destroyCarWorld, readCar, resolveCarControls, stepCarRound, stepCarWorld, writeCar,
   type CarInput, type CarWorld,
 } from "../src/shared/games/car-roquelike/physics.js";
 
@@ -140,6 +140,68 @@ describe("car-roquelike physics", () => {
     assert.ok(a.position.x < b.position.x, "they never swap sides");
     // Head-on: centers stay about a car length apart (a little overlap is matter's contact slop)
     assert.ok(closest > CAR_LENGTH * 0.8, `centers stayed apart (closest = ${closest.toFixed(1)})`);
+  });
+
+  describe("slip (loss of grip after a hit)", () => {
+    /**
+     * A drives north at full speed into the rear quarter of B (driving east). After `ticks`: both
+     * cars, each tick's highest slip, and B's largest turn off its heading.
+     */
+    const tBone = (ticks: number) => {
+      const world = createCarWorld();
+      const a = addCar(world, "a", 0);
+      const b = addCar(world, "b", 1);
+      writeCar(a, { x: 1600, y: 1350, angle: -Math.PI / 2, vx: 0, vy: -14, av: 0 });
+      writeCar(b, { x: 1465, y: 1200, angle: 0, vx: 14, vy: 0, av: 0 });
+      const inputs = new Map([["a", direction(-90)], ["b", direction(0)]]);
+      const slips: number[] = [];
+      let maxTurn = 0;
+      for (let tick = 0; tick < ticks; tick++) {
+        step(world, inputs, 1);
+        slips.push(Math.max(carSlip(a), carSlip(b)));
+        maxTurn = Math.max(maxTurn, Math.abs(b.angle));
+      }
+      return { world, a, b, slips, maxTurn };
+    };
+
+    it("never slips without a contact", () => {
+      const world = createCarWorld();
+      const a = addCar(world, "a", 0);
+      const b = addCar(world, "b", 5);
+      for (let tick = 0; tick < 200; tick++) {
+        step(world, new Map([["a", direction(tick * 7)], ["b", direction(-90, 0.6)]]), 1);
+        assert.strictEqual(carSlip(a), 0, `no slip at tick ${tick}`);
+        assert.strictEqual(carSlip(b), 0, `no slip at tick ${tick}`);
+      }
+    });
+
+    it("a car hit in the side is shoved off its line and turned, then grips again", () => {
+      const { world, b, slips, maxTurn } = tBone(40);
+      destroyCarWorld(world);
+      assert.ok(Math.max(...slips) > 0.5, `slipped (max ${Math.max(...slips).toFixed(2)})`);
+      assert.ok(Math.abs(b.position.y - 1200) > 20, `shoved sideways (y = ${b.position.y.toFixed(1)})`);
+      assert.ok(maxTurn > deg(10), `turned (up to ${(maxTurn * 180 / Math.PI).toFixed(1)}°)`);
+      assert.strictEqual(slips[slips.length - 1], 0, "grip is back");
+    });
+
+    it("is part of the car's snapshot, and makes it slide", () => {
+      const { world, b } = tBone(6);
+      const snapshot = readCar(b);
+      destroyCarWorld(world);
+      assert.ok(snapshot.slip > 0.3, `slipping after the hit (slip = ${snapshot.slip.toFixed(2)})`);
+
+      // The same car alone, from the snapshot with and without its slip: sideways speed after a tick
+      const sideways = (slip: number) => {
+        const { world: alone, car } = openWorld();
+        writeCar(car, { ...snapshot, slip });
+        assert.strictEqual(carSlip(car), slip);
+        step(alone, new Map([["a", direction(0)]]), 1);
+        const side = Math.abs(-car.velocity.x * Math.sin(car.angle) + car.velocity.y * Math.cos(car.angle));
+        destroyCarWorld(alone);
+        return side;
+      };
+      assert.ok(sideways(snapshot.slip) > sideways(0) * 5, "keeps much more of the shove while slipping");
+    });
   });
 
   describe("road", () => {

@@ -2,7 +2,8 @@ import Matter from "matter-js";
 import {
   CAR_ACCEL, CAR_BRAKE, CAR_COAST_KEEP, CAR_FULL_TURN_SPEED, CAR_GRIP_KEEP, CAR_HANDBRAKE_GRIP_KEEP,
   CAR_HANDBRAKE_KEEP, CAR_LENGTH, CAR_MAX_REVERSE_SPEED, CAR_MAX_SPEED, CAR_RESTITUTION,
-  CAR_AUTO_HANDBRAKE_ANGLE, CAR_HANDBRAKE_TURN_BOOST, CAR_INPUT_DEADZONE, CAR_STEER_AUTHORITY,
+  CAR_AUTO_HANDBRAKE_ANGLE, CAR_HANDBRAKE_TURN_BOOST, CAR_INPUT_DEADZONE, CAR_SLIP_GRIP_KEEP, CAR_SLIP_IMPACT_MIN,
+  CAR_SLIP_PER_IMPACT, CAR_SLIP_RECOVERY, CAR_SLIP_STEER_LOSS, CAR_STEER_AUTHORITY,
   CAR_STEER_FULL_ANGLE, CAR_TURN_RATE, CAR_WIDTH, DIRT_SPEED_FACTOR,
 } from "./constants.js";
 import { COUNTDOWN_TICKS, destructionFrontS, isDestroyed } from "./destruction.js";
@@ -93,7 +94,13 @@ export interface CarSnapshot {
   vx: number;
   vy: number;
   av: number;
+  /** Loss of grip after a hit, 0..1 (see `CAR_SLIP_IMPACT_MIN`). Missing = 0. */
+  slip?: number;
 }
+
+/** A car's slip (loss of grip after a hit, 0..1), kept on its body. */
+export const carSlip = (body: Matter.Body): number => (body.plugin as { slip?: number }).slip ?? 0;
+const setCarSlip = (body: Matter.Body, slip: number) => { (body.plugin as { slip?: number }).slip = slip; };
 
 export interface CarWorld {
   engine: Matter.Engine;
@@ -173,6 +180,7 @@ export function applyCarInput(body: Matter.Body, input: CarInput | undefined, ro
   let forward = vx * cos + vy * sin;
   let side = -vx * sin + vy * cos;
 
+  const slip = carSlip(body);
   let steer = 0;
   let handbrake = false;
   if (!input) {
@@ -189,7 +197,7 @@ export function applyCarInput(body: Matter.Body, input: CarInput | undefined, ro
       const target = controls.throttle * maxSpeed;
       if (forward < target) {
         // Pushed backwards (a crash): recover at braking strength
-        forward = Math.min(target, forward + (forward < 0 ? CAR_BRAKE : CAR_ACCEL));
+        forward = Math.min(target, forward + (forward < 0 ? CAR_BRAKE : CAR_ACCEL) * (1 - slip));
       } else {
         // Faster than the stick asks for: roll down to it
         forward = Math.max(target, forward * CAR_COAST_KEEP);
@@ -199,7 +207,9 @@ export function applyCarInput(body: Matter.Body, input: CarInput | undefined, ro
   if (handbrake) forward *= CAR_HANDBRAKE_KEEP;
   forward = clamp(forward, -CAR_MAX_REVERSE_SPEED, CAR_MAX_SPEED);
 
-  side *= handbrake ? CAR_HANDBRAKE_GRIP_KEEP : CAR_GRIP_KEEP;
+  // Slipping after a hit: the car slides on with the shove
+  const gripKeep = handbrake ? CAR_HANDBRAKE_GRIP_KEEP : CAR_GRIP_KEEP;
+  side *= gripKeep + (Math.max(gripKeep, CAR_SLIP_GRIP_KEEP) - gripKeep) * slip;
 
   Body.setVelocity(body, { x: forward * cos - side * sin, y: forward * sin + side * cos });
 
@@ -207,9 +217,15 @@ export function applyCarInput(body: Matter.Body, input: CarInput | undefined, ro
   const speedFactor = clamp(forward / CAR_FULL_TURN_SPEED, -1, 1);
   const turnRate = CAR_TURN_RATE * (handbrake ? CAR_HANDBRAKE_TURN_BOOST : 1);
   const targetSpin = steer * turnRate * speedFactor;
-  const spin = body.angularVelocity + (targetSpin - body.angularVelocity) * CAR_STEER_AUTHORITY;
+  // ... and steering barely holds the spin from the hit
+  const authority = CAR_STEER_AUTHORITY * (1 - CAR_SLIP_STEER_LOSS * slip);
+  const spin = body.angularVelocity + (targetSpin - body.angularVelocity) * authority;
   Body.setAngularVelocity(body, spin);
+  if (slip > 0) setCarSlip(body, Math.max(0, slip - CAR_SLIP_RECOVERY));
 }
+
+/** Reused by `stepCarWorld`: each car's velocity before a physics update (vx, vy, av per car). */
+const before: number[] = [];
 
 /**
  * Advance the world by one input tick: `subSteps` physics steps of `subDtMs` each, applying every
@@ -226,7 +242,24 @@ export function stepCarWorld(
     for (const [id, body] of world.cars) {
       applyCarInput(body, inputs.get(id), world.road, world.frontS);
     }
+    // The velocities the handling set: whatever changes them during the update is a contact
+    let n = 0;
+    for (const body of world.cars.values()) {
+      before[n++] = body.velocity.x;
+      before[n++] = body.velocity.y;
+      before[n++] = body.angularVelocity;
+    }
     Engine.update(world.engine, subDtMs);
+    n = 0;
+    for (const body of world.cars.values()) {
+      const dv = Math.hypot(body.velocity.x - before[n], body.velocity.y - before[n + 1]);
+      const dav = Math.abs(body.angularVelocity - before[n + 2]);
+      n += 3;
+      const impact = dv + dav * (CAR_LENGTH / 2);
+      if (impact > CAR_SLIP_IMPACT_MIN) {
+        setCarSlip(body, Math.max(carSlip(body), Math.min(1, (impact - CAR_SLIP_IMPACT_MIN) * CAR_SLIP_PER_IMPACT)));
+      }
+    }
   }
 }
 
@@ -270,13 +303,14 @@ export function maintainRoad(world: CarWorld, frontS: number): void {
   pruneRoad(world.road, frontS);
 }
 
-export function readCar(body: Matter.Body, out: CarSnapshot = { x: 0, y: 0, angle: 0, vx: 0, vy: 0, av: 0 }): CarSnapshot {
+export function readCar(body: Matter.Body, out: CarSnapshot = { x: 0, y: 0, angle: 0, vx: 0, vy: 0, av: 0, slip: 0 }): CarSnapshot {
   out.x = body.position.x;
   out.y = body.position.y;
   out.angle = body.angle;
   out.vx = body.velocity.x;
   out.vy = body.velocity.y;
   out.av = body.angularVelocity;
+  out.slip = carSlip(body);
   return out;
 }
 
@@ -285,4 +319,5 @@ export function writeCar(body: Matter.Body, snapshot: CarSnapshot): void {
   Body.setAngle(body, snapshot.angle);
   Body.setVelocity(body, { x: snapshot.vx, y: snapshot.vy });
   Body.setAngularVelocity(body, snapshot.av);
+  setCarSlip(body, snapshot.slip ?? 0);
 }

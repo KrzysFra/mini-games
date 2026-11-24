@@ -63,3 +63,18 @@ export const CAR_STEER_AUTHORITY = 0.35;
 
 /** Car-vs-car / car-vs-wall bounce. */
 export const CAR_RESTITUTION = 0.3;
+
+/**
+ * Loss of grip after a hit ("slip", 0..1). A physics step's velocity change from contacts (speed
+ * plus spin at the car's ends) above `CAR_SLIP_IMPACT_MIN` sets slip to
+ * `(impact - min) × CAR_SLIP_PER_IMPACT`; while slipping the car keeps more sideways speed (it
+ * slides with the shove), steering holds the spin less (spin-outs) and it accelerates less.
+ */
+export const CAR_SLIP_IMPACT_MIN = 0.5;
+export const CAR_SLIP_PER_IMPACT = 0.25;
+/** Sideways speed kept per step at full slip (normal grip keeps `CAR_GRIP_KEEP`). */
+export const CAR_SLIP_GRIP_KEEP = 0.95;
+/** Share of the steering authority lost at full slip. */
+export const CAR_SLIP_STEER_LOSS = 0.9;
+/** Slip regained per physics step: full slip back to full grip in ~0.5 s. */
+export const CAR_SLIP_RECOVERY = 1 / 30;

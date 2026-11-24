@@ -4,14 +4,16 @@ import type { ColyseusTestServer } from "@colyseus/testing";
 import type appConfig from "../src/server/app.config.js";
 import { testServer } from "./server.js";
 import type { GameSelectionRoomState } from "../src/server/rooms/schema/MiniGameRoomState.js";
+import { INPUT_BUTTONS } from "../src/shared/constants.js";
 import { COUNTDOWN_TICKS } from "../src/shared/games/car-roquelike/destruction.js";
 
-const GAME = "car-roquelike";
+/** car-roquelike and its force-driven clones share the room, schema and round logic. */
+const CAR_GAMES = ["car-roquelike", "car-roquelike-mjs-torque", "car-roquelike-mjs-axle"];
 
 /** Jump the round past its 5 s countdown, so cars can move right away. */
 const skipCountdown = (state: GameSelectionRoomState) => { state.carRoundTick = COUNTDOWN_TICKS; };
 
-describe("car-roquelike room", () => {
+for (const GAME of CAR_GAMES) describe(`${GAME} room`, () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
 
   before(async () => colyseus = await testServer());
@@ -91,6 +93,26 @@ describe("car-roquelike room", () => {
       await room.waitForNextSimulationTick();
     }
     assert.ok(car.y < startY - 20, `drove up (from ${startY.toFixed(1)} to ${car.y.toFixed(1)})`);
+  });
+
+  it("shows every car's last applied input, so clients can predict other players", async () => {
+    const { room, client1, client2 } = await startGame();
+    skipCountdown(room.state);
+    const input = client1.input();
+    for (let i = 0; i < 5; i++) {
+      input.data.x = 0.5;
+      input.data.y = -0.75;
+      input.data.buttons = INPUT_BUTTONS.ACTION;
+      input.send();
+      await room.waitForNextSimulationTick();
+    }
+    const car = room.state.cars.get(client1.sessionId);
+    assert.strictEqual(car.inX, 0.5);
+    assert.strictEqual(car.inY, -0.75);
+    assert.strictEqual(car.inButtons, INPUT_BUTTONS.ACTION);
+    // No input from client2 yet: zeros
+    const other = room.state.cars.get(client2.sessionId);
+    assert.deepStrictEqual([other.inX, other.inY, other.inButtons], [0, 0, 0]);
   });
 
   it("removes a leaving player's car, and clears all cars when the game ends", async () => {

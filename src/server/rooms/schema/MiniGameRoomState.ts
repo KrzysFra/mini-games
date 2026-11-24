@@ -10,6 +10,11 @@ export const Player = schema({
   color: t.uint32().default(DEFAULT_DOT_COLOR),
   /** Pressed Escape in the placeholder game; when everyone has, the room returns to game selection. */
   escaped: t.boolean().default(false),
+  /**
+   * Sandbox only: a CPU driver, i.e. an extra connection from a player's tab that sends inputs like
+   * any player. Never counts toward "everyone escaped".
+   */
+  cpu: t.boolean().default(false),
 })
 export type Player = SchemaType<typeof Player>
 
@@ -22,6 +27,15 @@ export const Car = schema({
   vy: t.float32(),
   /** Angular velocity. */
   av: t.float32(),
+  /** Loss of grip after a hit, 0..1 (part of the physics state clients adopt). */
+  slip: t.float32(),
+  /**
+   * The input the server last applied to this car (zeros when none). Clients predict other
+   * players' cars with it until the next update.
+   */
+  inX: t.float32(),
+  inY: t.float32(),
+  inButtons: t.uint8(),
   /** Seat index: picks the spawn point and the car's color. */
   seat: t.uint8(),
   /** Caught by the destruction front: out of this round (no longer simulated). */

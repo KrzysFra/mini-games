@@ -1,6 +1,6 @@
 import { Predict, type InputHandle, type SimReconciler } from '@colyseus/sdk'
 import { Cameras, GameObjects, Geom, Input, Math as PMath, Types } from 'phaser'
-import { INPUT_BUTTONS, TICK_RATE } from '../../../shared/constants'
+import { INPUT_BUTTONS, MAX_PLAYERS_PER_ROOM, TICK_RATE } from '../../../shared/constants'
 import { CAR_LENGTH, CAR_WIDTH, ROAD_WIDTH } from '../../../shared/games/car-roquelike/constants'
 import {
   CHUNK_SIZE, COUNTDOWN_TICKS, chunkBreakS, chunkHash, chunkIndex, destructionFrontS,
@@ -11,13 +11,19 @@ import {
   addCar, createCarWorld, destroyCarWorld, maintainRoad, removeCar, stepCarRound, toCarInput, writeCar,
   type CarInput, type CarSnapshot, type CarWorld, type GameInputLike,
 } from '../../../shared/games/car-roquelike/physics'
+import { SANDBOX_GAME, SANDBOX_ROOM } from '../../core/sandbox'
 import { textStyle } from '../../core/ui'
 import { MiniGameParent } from '../MiniGameScene'
+import { CpuDrivers } from './CpuDrivers'
 
 /** The fields of the server's room state this scene reads. */
 interface CarView extends CarSnapshot {
   seat: number
   eliminated: boolean
+  /** The input the server last applied to the car. */
+  inX: number
+  inY: number
+  inButtons: number
 }
 
 interface PlayerView {
@@ -42,8 +48,16 @@ interface PredictedWorld {
   roundTick: number
 }
 
-/** Our car's pose plus the round tick, so the front is drawn smoothly at our predicted time. */
-type CarPose = { x: number, y: number, angle: number, roundTick: number }
+/**
+ * What the predictor interpolates and smooths: every car's pose, in a fixed slot per seat (the SDK
+ * takes the field set from the first pose, so it can't follow cars coming and going), plus the
+ * round tick, so the front is drawn smoothly at our predicted time.
+ */
+type WorldPose = Record<string, number>
+
+/** Pose field names of each seat's slot. */
+const SEAT_FIELDS = Array.from({ length: MAX_PLAYERS_PER_ROOM }, (_, seat) => ({ x: `x${seat}`, y: `y${seat}`, angle: `a${seat}` }))
+const seatFields = (seat: number) => SEAT_FIELDS[seat % SEAT_FIELDS.length]
 
 /** A road piece being drawn: its Graphics, bounds for culling, and where along the road it's drawn from. */
 interface DrawnPiece {
@@ -136,19 +150,22 @@ const mixColor = (a: number, b: number, t: number) => {
  *
  * The server runs the authoritative matter.js world (`CarRoquelikeSim`). This scene runs the same
  * shared physics locally to predict its own car: inputs apply immediately, and each server update
- * is adopted and the not-yet-confirmed inputs replayed (`predict.sim`). Other cars are drawn
- * interpolated between server updates. The camera is north-up and follows your car.
+ * is adopted and the not-yet-confirmed inputs replayed (`predict.sim`). Other cars are predicted in
+ * the same world, repeating the input the server last applied to them (`Car.inX/inY/inButtons`),
+ * and every car is drawn from it (interpolated and correction-smoothed by the SDK), so what you see
+ * is what you hit. Until our own car exists, other cars are drawn interpolated between server updates.
  */
 export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   private carWorld: CarWorld
   private predict: Predict
-  private sim: SimReconciler<GameInputLike, CarPose, PredictedWorld> | undefined
+  private sim: SimReconciler<GameInputLike, WorldPose, PredictedWorld> | undefined
   private gameInput: InputHandle<GameInputLike>
-  /** Reused input map for stepping: only our own car gets an input on the client. */
+  /** Reused input map for stepping: ours from the command, others' last server input (set on adopt). */
   private stepInputs = new Map<string, CarInput>()
+  private wireScratch: GameInputLike = { x: 0, y: 0, buttons: 0 }
   private eliminatedScratch: string[] = []
-  /** Our car's last pose while it existed, for the pose once it's gone (eliminated). */
-  private lastPose: CarPose = { x: 0, y: 0, angle: 0, roundTick: 0 }
+  /** Reused pose; a seat's slot keeps its last value while no car is in it. */
+  private worldPose: WorldPose = { roundTick: 0, ...Object.fromEntries(SEAT_FIELDS.flatMap(f => [[f.x, 0], [f.y, 0], [f.angle, 0]])) }
 
   private cars = new Map<string, CarSprite>()
   /** Covers the camera's view every frame, so the dirt looks endless. */
@@ -173,6 +190,8 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   private statusText: GameObjects.Text
   /** HUD line: whether a gamepad is detected (and which), to debug controller setups in-game. */
   private padText: GameObjects.Text
+  /** Sandbox only: CPU drivers hosted by this tab (extra connections that drive like players). */
+  private cpuDrivers: CpuDrivers | undefined
   private keys: Record<'up' | 'down' | 'left' | 'right' | 'w' | 'a' | 's' | 'd' | 'space', Input.Keyboard.Key>
 
   constructor() {
@@ -234,6 +253,8 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     // Same handle for the room's whole life (the SDK caches it). Reliable: WebSocket has no
     // unreliable channel, so 'unreliable' would only add redundant copies (and a console warning)
     this.gameInput = this.room.input<GameInputLike>({ mode: 'reliable' })
+
+    if (SANDBOX_GAME && this.room.name === SANDBOX_ROOM) this.cpuDrivers = new CpuDrivers(this.room)
   }
 
   private drawWorld() {
@@ -452,14 +473,14 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     g.fillStyle(mixColor(ground, COLOR_VOID, progress)).fillPoints(c, true)
   }
 
-  /** Start predicting our own car once the server has given us one. */
+  /** Start predicting (our car, and the others with it) once the server has given us a car. */
   private startPrediction() {
     const me = this.room.sessionId
-    this.sim = this.predict.sim<GameInputLike, CarPose, PredictedWorld>({
+    this.sim = this.predict.sim<GameInputLike, WorldPose, PredictedWorld>({
       input: this.gameInput,
       world: { physics: this.carWorld, roundTick: this.state?.carRoundTick ?? 0 },
       // Exactly what the server does for one tick (countdown, physics, elimination); other cars
-      // just coast until the next update. The round tick is predicted along with the inputs.
+      // repeat their last known input. The round tick is predicted along with the inputs.
       step: (ctx, world, command) => {
         this.stepInputs.set(me, toCarInput(command, this.stepInputs.get(me)))
         stepCarRound(world.physics, this.stepInputs, world.roundTick, ctx.subSteps, ctx.subDtMs, this.eliminatedScratch)
@@ -469,20 +490,25 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
       // unconfirmed inputs on top
       adopt: world => {
         this.adoptServerCars(world.physics) // (the road too: a new one comes with each round)
+        this.adoptOtherInputs()
         world.roundTick = this.state?.carRoundTick ?? 0
       },
       pose: world => {
-        const body = world.physics.cars.get(me)
-        const pose = this.lastPose
-        if (body) {
-          pose.x = body.position.x
-          pose.y = body.position.y
-          pose.angle = body.angle
+        const pose = this.worldPose
+        const cars = this.state?.cars
+        for (const [id, body] of world.physics.cars) {
+          const car = cars?.get(id)
+          if (!car) continue
+          const f = seatFields(car.seat)
+          pose[f.x] = body.position.x
+          pose[f.y] = body.position.y
+          pose[f.angle] = body.angle
         }
-        return { x: pose.x, y: pose.y, angle: pose.angle, roundTick: world.roundTick }
+        pose.roundTick = world.roundTick
+        return pose
       },
       smoothMs: 65,
-      // A round restart moves everything back to the start: cut, don't glide
+      // A round restart (or a car joining) moves a car across the map: cut, don't glide
       snap: SNAP_DISTANCE,
     })
   }
@@ -500,6 +526,24 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
       const body = physics.cars.get(id)
       if (body) writeCar(body, car)
       else addCar(physics, id, car.seat, car)
+    }
+  }
+
+  /** Other cars repeat the input the server last applied to them until the next update. */
+  private adoptOtherInputs() {
+    const me = this.room.sessionId
+    const cars = this.state?.cars
+    if (!cars) return
+    for (const id of this.stepInputs.keys()) {
+      if (id !== me && !cars.get(id)) this.stepInputs.delete(id)
+    }
+    const wire = this.wireScratch
+    for (const [id, car] of cars) {
+      if (id === me) continue
+      wire.x = car.inX
+      wire.y = car.inY
+      wire.buttons = car.inButtons
+      this.stepInputs.set(id, toCarInput(wire, this.stepInputs.get(id)))
     }
   }
 
@@ -528,12 +572,12 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   }
 
   /**
-   * Whether a car is out of the round: the server says so, or (our own car) the prediction
-   * already dropped it into the void.
+   * Whether a car is out of the round: the server says so, or the prediction already dropped it
+   * into the void.
    */
   private isOut(id: string, car: CarView): boolean {
     if (car.eliminated) return true
-    return id === this.room.sessionId && !!this.sim && !this.carWorld.cars.has(id)
+    return !!this.sim && !this.carWorld.cars.has(id)
   }
 
   private createCarSprite(id: string, seat: number): CarSprite {
@@ -580,6 +624,7 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     if (this.drawnRoad) this.updateDestruction(this.drawnRoad, frontS)
     this.updateRoundHud(roundTick)
     this.updatePadStatus()
+    this.cpuDrivers?.update(time)
   }
 
   /** The countdown (5, 4, 3, 2, 1, GO!) and whether we're out of the round. */
@@ -650,7 +695,8 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
   private positionCars() {
     const state = this.state
     if (!state) return
-    const me = this.room.sessionId
+    // Once predicting, every car is drawn where our physics world has it (what we collide with)
+    const pose = this.sim?.pose()
 
     for (const [id, sprite] of this.cars) {
       const car = state.cars.get(id)
@@ -662,9 +708,9 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
       if (!visible) continue
 
       let x: number, y: number, angle: number
-      if (id === me && this.sim) {
-        const pose = this.sim.pose()
-        x = pose.x; y = pose.y; angle = pose.angle
+      if (pose) {
+        const f = seatFields(car.seat)
+        x = pose[f.x]; y = pose[f.y]; angle = pose[f.angle]
       } else {
         x = this.predict.value(car, 'x')
         y = this.predict.value(car, 'y')
@@ -696,6 +742,8 @@ export class CarRoquelikeGame extends MiniGameParent<RoomStateView> {
     this.sim = undefined
     this.predict?.dispose()
     this.predict = undefined
+    this.cpuDrivers?.dispose()
+    this.cpuDrivers = undefined
     if (this.carWorld) destroyCarWorld(this.carWorld)
     this.carWorld = undefined
   }

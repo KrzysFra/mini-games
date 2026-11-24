@@ -20,9 +20,21 @@ const carRoquelike: ClientMiniGame = {
   load: () => import('./car-roquelike/CarRoquelikeGame').then(m => m.CarRoquelikeGame),
 }
 
+const carRoquelikeMjsTorque: ClientMiniGame = {
+  key: 'CarRoquelikeMjsTorqueGame',
+  load: () => import('./car-roquelike-mjs-torque/CarRoquelikeMjsTorqueGame').then(m => m.CarRoquelikeMjsTorqueGame),
+}
+
+const carRoquelikeMjsAxle: ClientMiniGame = {
+  key: 'CarRoquelikeMjsAxleGame',
+  load: () => import('./car-roquelike-mjs-axle/CarRoquelikeMjsAxleGame').then(m => m.CarRoquelikeMjsAxleGame),
+}
+
 /** Client side of each `MINI_GAMES` entry (`src/shared/games.ts`), by id. */
 const CLIENT_MINI_GAMES: Record<string, ClientMiniGame> = {
   'car-roquelike': carRoquelike,
+  'car-roquelike-mjs-torque': carRoquelikeMjsTorque,
+  'car-roquelike-mjs-axle': carRoquelikeMjsAxle,
   'placeholder-1': placeholder,
   'placeholder-2': placeholder,
   'placeholder-3': placeholder,

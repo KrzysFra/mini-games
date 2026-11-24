@@ -24,5 +24,8 @@ export const INPUT_BUTTONS_MASK = 0b1;
 /** Seats in a game room; the selection screen shows one player slot per seat. */
 export const MAX_PLAYERS_PER_ROOM = 8;
 
+/** Sandbox mode: CPU drivers kept in the sandbox room (they take player seats). */
+export const SANDBOX_CPU_PLAYERS = 2;
+
 /** Color of a player's dot in the placeholder game until they press a key. */
 export const DEFAULT_DOT_COLOR = 0xff0000;

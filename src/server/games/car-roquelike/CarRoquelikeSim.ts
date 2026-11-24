@@ -34,7 +34,7 @@ export class CarRoquelikeSim implements ServerMiniGame {
 
     const seat = this.freeSeat();
     const body = addCar(this.world, sessionId, seat);
-    this.state.cars.set(sessionId, new Car({ ...readCar(body), seat }));
+    this.state.cars.set(sessionId, new Car({ ...readCar(body), slip: 0, inX: 0, inY: 0, inButtons: 0, seat }));
   }
 
   removePlayer(sessionId: string) {
@@ -48,12 +48,18 @@ export class CarRoquelikeSim implements ServerMiniGame {
     // A shared world: exactly one input per player per tick (an empty tick repeats the last one,
     // see the room's `idle` policy), so the server's ack matches what it simulated. Eliminated
     // players keep sending, and their inputs are consumed too so their acks keep advancing.
-    for (const sessionId of this.state.cars.keys()) {
+    for (const [sessionId, car] of this.state.cars) {
       const input = inputs.get(sessionId).next();
       if (input && this.world.cars.has(sessionId)) {
         this.inputs.set(sessionId, toCarInput(input, this.inputs.get(sessionId)));
+        car.inX = input.x;
+        car.inY = input.y;
+        car.inButtons = input.buttons;
       } else {
         this.inputs.delete(sessionId);
+        car.inX = 0;
+        car.inY = 0;
+        car.inButtons = 0;
       }
     }
 
