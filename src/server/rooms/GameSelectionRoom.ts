@@ -107,6 +107,27 @@ export class GameSelectionRoom extends Room<{ state: GameSelectionRoomState, inp
     this.endIfAllEscaped()
   }
 
+  /**
+   * Dev mode only: after a hot reload the room is re-created (`onCreate`) and its old state
+   * restored over it.
+   *
+   * Only players who were connected at the reload get a seat to reconnect into (and an `onLeave`
+   * if they don't). Players who had dropped and were waiting to reconnect come back in the state
+   * without one, so nothing would ever remove them: drop them here.
+   *
+   * The running simulation isn't restored either: it would have none of the restored players
+   * (they come back through `onReconnect`, not `onJoin`). Start the game afresh from the
+   * remaining players so the simulation and the state agree again.
+   */
+  onRestoreRoom() {
+    for (const sessionId of [...this.state.players.keys()]) {
+      if (this.clients.getById(sessionId) || this.hasReservedSeat(sessionId)) { continue }
+      console.log(sessionId, "dropped on restore (no seat to reconnect into)")
+      this.state.players.delete(sessionId)
+    }
+    if (this.state.phase === "playing") { this.startGame() }
+  }
+
   onDispose() {
     this.stopGame()
     console.log("room", this.roomId, "disposing...")

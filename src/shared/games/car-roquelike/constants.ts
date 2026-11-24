@@ -10,9 +10,13 @@ export const PHYSICS_SUBSTEPS = 2;
 /** Matter's native step; `1000 / TICK_RATE / PHYSICS_SUBSTEPS` must equal it. */
 export const PHYSICS_STEP_MS = 1000 / 60;
 
-export const ARENA_WIDTH = 3200;
-export const ARENA_HEIGHT = 2400;
-export const WALL_THICKNESS = 80;
+/**
+ * The world: one randomly generated, endless road (`road.ts`), starting at the origin heading
+ * north. Everything else, in every direction, is dirt.
+ */
+export const ROAD_WIDTH = 400;
+/** Share of the top speed a car keeps on dirt. */
+export const DIRT_SPEED_FACTOR = 0.5;
 
 /** A car is a rectangle that faces +x at angle 0 (length along x). */
 export const CAR_LENGTH = 40;

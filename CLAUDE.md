@@ -37,7 +37,8 @@ src/client/games/      mini-game scenes: registry.ts (`MINI_GAMES` id → scene 
                        car-roquelike/CarRoquelikeGame.ts (top-down cars, predicted; see car-roquelike in Notes)
 src/server/games/      server side of mini-games that simulate: registry.ts (`MINI_GAMES` id → `ServerMiniGame`
                        factory), types.ts, car-roquelike/CarRoquelikeSim.ts (authoritative matter world)
-src/shared/games/      per-game shared code: car-roquelike/ (constants, map, physics.ts on `matter-js`)
+src/shared/games/      per-game shared code: car-roquelike/ (constants, map, physics.ts on `matter-js`,
+                       destruction.ts, road.ts)
 src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
 src/server/rooms/GameSelectionRoom.ts   the game room (type `my_room`): selection → playing
 src/server/rooms/SandboxRoom.ts   dev-only `sandbox` room (extends GameSelectionRoom)
@@ -115,8 +116,38 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `CAR_STEER_FULL_ANGLE`), with an automatic handbrake beyond `CAR_AUTO_HANDBRAKE_ANGLE` (80°); there is
   no reverse. `INPUT_BUTTONS.ACTION` forces the handbrake. Keyboard (WASD/arrows), D-pad and `pad1`'s left
   stick (round deadzone) are summed and capped at length 1; A/Space = handbrake, Start/Back = escape.
-  Cars without an input (others' cars in client prediction) coast. The scene enables gamepads itself via
-  `input: { gamepad: true }` in its settings (missing from Phaser 4's `SettingsConfig` type, so it's widened). Camera: north-up, follows, zooms out with speed;
+  Cars without an input (others' cars in client prediction) coast. World: an endless random road (`road.ts`):
+  `ROAD_WIDTH` 400 wide, straights 400..2000 and corners of radius 400..2000 turning 0..120°, from
+  `state.roadSeed` (new per round). It starts at the origin with a fixed 2000 straight north (the 2×4
+  spawn grid is on it), then may go any direction. It is one fixed sequence per seed, generated on
+  demand: `maintainRoad` (server each tick, client each frame) keeps it `ROAD_AHEAD` (4000) beyond the
+  leading car and prunes old data. Road more than `ROAD_KEEP_BEHIND` (1000) behind the front is deleted
+  (dirt again; `roadTail`). Determinism however far/when each side generated: a new piece keeps 1200
+  clear only of the last `CLEARANCE_WINDOW` (12000) of road (older ground is reused), and the generator
+  runs `COMMIT_BUFFER` (15000) beyond the committed road it hands out, backtracking out of dead ends
+  only within that (stuck at committed road, it forces a piece: rarely, a crossing). Only committed
+  road is used. Lookups: centerline samples (absolute indices, `sampleBase` after pruning) in a spatial
+  grid: `isOnRoad(road, x, y, frontS)`, `roadDistanceAt`, `chunkOwnerS` (a chunk's owner = nearest
+  sample within `ownerWindowStart`, deleted road included; memoized, updated incrementally). The server
+  builds its own `buildRoad` per room; the client uses `getRoad` (cached per seed). Endless dirt
+  everywhere else (no walls, no camera bounds); on dirt the top speed is ×`DIRT_SPEED_FACTOR` (0.5) and
+  faster cars roll down to it. `CarWorld.road`/`frontS` carry the road into the physics. The client
+  draws the dirt as a TileSprite re-fitted to the view each frame, and the road as one Graphics per
+  committed piece (added as committed, destroyed once deleted, the tail piece redrawn cut at the tail),
+  culled to the view.
+  Rounds: `state.carRoundTick` counts ticks; the first `COUNTDOWN_TICKS` are a countdown with physics
+  frozen. Then the destruction front (`destruction.ts`) moves along the road from its start at
+  `DESTRUCTION_SPEED`: a chunk is void once the front passes its owner's distance along the road (dirt
+  goes with the stretch of road beside it), and restored once its owner is deleted, so the void is a
+  band following the front. The front edge is ragged: per-`CHUNK_SIZE`-chunk break points
+  (`chunkBreakS`, integer-hash noise). A car whose center is over a void chunk is eliminated
+  (`stepCarRound` removes its body; `Car.eliminated`). When every car is out, the sim restarts the round
+  (`carRound++`, new road, cars back at their spawns). Eliminated players' inputs are still consumed so
+  their acks advance. The client predicts the round tick with its inputs (in the sim world, adopted from
+  `carRoundTick`), draws the front at that predicted time (fallen chunks as merged void runs,
+  cracking/falling chunks at the edge).
+  Room tests skip the countdown by setting `state.carRoundTick`. The scene enables gamepads itself via
+  `input: { gamepad: true }` in its settings (missing from Phaser 4's `SettingsConfig` type, so it's widened). Camera: the same for everyone, north-up, fixed zoom (`CAMERA_ZOOM`), centered on the road `CAMERA_AHEAD_OF_FRONT` (500) ahead of the predicted front (`roadPointAt`);
   the HUD is on a second camera (world and HUD in separate layers, each camera ignores the other).
   Velocities are matter units (px per 1000/60 ms), which is also the physics step.
 - **Sandbox mode** (for developing a mini-game): put `VITE_SANDBOX=<MINI_GAMES id>` (or `true` for the

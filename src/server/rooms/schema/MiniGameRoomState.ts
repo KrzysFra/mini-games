@@ -24,6 +24,8 @@ export const Car = schema({
   av: t.float32(),
   /** Seat index: picks the spawn point and the car's color. */
   seat: t.uint8(),
+  /** Caught by the destruction front: out of this round (no longer simulated). */
+  eliminated: t.boolean().default(false),
 })
 export type Car = SchemaType<typeof Car>
 
@@ -50,5 +52,11 @@ export const GameSelectionRoomState = schema({
   players: t.map(Player),
   /** car-roquelike: one car per player (by sessionId) while the game runs. */
   cars: t.map(Car),
+  /** car-roquelike: rounds played since the game started; goes up on every restart. */
+  carRound: t.uint16().default(0),
+  /** car-roquelike: ticks this round has run (countdown included); drives the destruction front. */
+  carRoundTick: t.uint32().default(0),
+  /** car-roquelike: seed of this round's road (`getRoad`); everyone builds the same road from it. */
+  roadSeed: t.uint32().default(0),
 })
 export type GameSelectionRoomState = SchemaType<typeof GameSelectionRoomState>

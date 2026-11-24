@@ -1,5 +1,3 @@
-import { ARENA_HEIGHT, ARENA_WIDTH, WALL_THICKNESS } from "./constants.js";
-
 /** An axis-aligned static rectangle, by its center. */
 export interface MapBlock {
   x: number;
@@ -14,31 +12,27 @@ export interface SpawnPoint {
   angle: number;
 }
 
-const half = WALL_THICKNESS / 2;
-
-/** Outer walls, just inside the arena bounds. */
-const WALLS: MapBlock[] = [
-  { x: ARENA_WIDTH / 2, y: half, width: ARENA_WIDTH, height: WALL_THICKNESS },
-  { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT - half, width: ARENA_WIDTH, height: WALL_THICKNESS },
-  { x: half, y: ARENA_HEIGHT / 2, width: WALL_THICKNESS, height: ARENA_HEIGHT },
-  { x: ARENA_WIDTH - half, y: ARENA_HEIGHT / 2, width: WALL_THICKNESS, height: ARENA_HEIGHT },
-];
-
 /** A few "buildings" to drive around. */
 const BUILDINGS: MapBlock[] = [
   // { x: 800, y: 700, width: 400, height: 300 },
-  // { x: 2400, y: 700, width: 400, height: 300 },
-  // { x: 800, y: 1700, width: 400, height: 300 },
-  // { x: 2400, y: 1700, width: 400, height: 300 },
-  // { x: 1600, y: 1200, width: 240, height: 240 },
 ];
 
 /** Everything static in the world. Client draws it, both sides build bodies from it. */
-export const MAP_BLOCKS: readonly MapBlock[] = [...WALLS, ...BUILDINGS];
+export const MAP_BLOCKS: readonly MapBlock[] = [...BUILDINGS];
 
-/** One spawn per seat (`MAX_PLAYERS_PER_ROOM`): a row along the bottom street, facing up. */
+/**
+ * How far up the road (from its start at the origin, where the destruction starts) the front row
+ * spawns. A car starting from standstill falls up to ~900 behind the front before it's up to
+ * speed, plus the ragged edge (`CHUNK_JITTER`), so this leaves a few hundred units of slack.
+ */
+const SPAWN_HEAD_START = 1500;
+
+/**
+ * One spawn per seat (`MAX_PLAYERS_PER_ROOM`): two rows of four on the road's first piece (always
+ * a straight north from the origin, `START_STRAIGHT_LENGTH`), facing north.
+ */
 export const SPAWN_POINTS: readonly SpawnPoint[] = Array.from({ length: 8 }, (_, i) => ({
-  x: 1600 + (i - 3.5) * 140,
-  y: 2150,
+  x: ((i % 4) - 1.5) * 100,
+  y: -SPAWN_HEAD_START - Math.floor(i / 4) * 100,
   angle: -Math.PI / 2,
 }));

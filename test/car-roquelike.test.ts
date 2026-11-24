@@ -4,8 +4,12 @@ import type { ColyseusTestServer } from "@colyseus/testing";
 import type appConfig from "../src/server/app.config.js";
 import { testServer } from "./server.js";
 import type { GameSelectionRoomState } from "../src/server/rooms/schema/MiniGameRoomState.js";
+import { COUNTDOWN_TICKS } from "../src/shared/games/car-roquelike/destruction.js";
 
 const GAME = "car-roquelike";
+
+/** Jump the round past its 5 s countdown, so cars can move right away. */
+const skipCountdown = (state: GameSelectionRoomState) => { state.carRoundTick = COUNTDOWN_TICKS; };
 
 describe("car-roquelike room", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
@@ -41,8 +45,41 @@ describe("car-roquelike room", () => {
     assert.ok(car1.x !== car2.x || car1.y !== car2.y, "distinct spawn points");
   });
 
+  it("holds cars still during the countdown", async () => {
+    const { room, client1 } = await startGame();
+    const car = room.state.cars.get(client1.sessionId);
+    const startY = car.y;
+
+    const input = client1.input();
+    for (let i = 0; i < 10; i++) {
+      input.data.y = -1;
+      input.send();
+      await room.waitForNextSimulationTick();
+    }
+    assert.ok(room.state.carRoundTick < COUNTDOWN_TICKS, "still counting down");
+    assert.strictEqual(car.y, startY, "didn't move");
+  });
+
+  it("eliminates cars caught by the destruction, and restarts once everyone is out", async () => {
+    const { room, client1, client2 } = await startGame();
+    const car1 = room.state.cars.get(client1.sessionId);
+    const car2 = room.state.cars.get(client2.sessionId);
+    const spawnY = car1.y;
+    // Nobody drives, and the front starts out almost at the spawn (it takes ~60 ticks to get there)
+    room.state.carRoundTick = COUNTDOWN_TICKS + 50;
+
+    for (let i = 0; i < 60 && room.state.carRound === 0; i++) {
+      await room.waitForNextSimulationTick();
+    }
+    assert.strictEqual(room.state.carRound, 1, "a new round started");
+    assert.ok(!car1.eliminated && !car2.eliminated, "everyone is back in");
+    assert.strictEqual(car1.y, spawnY, "back at the spawn point");
+    assert.ok(room.state.carRoundTick < COUNTDOWN_TICKS, "counting down again");
+  });
+
   it("moves a car forward with throttle input", async () => {
     const { room, client1 } = await startGame();
+    skipCountdown(room.state);
     const car = room.state.cars.get(client1.sessionId);
     const startY = car.y;
 
@@ -70,11 +107,29 @@ describe("car-roquelike room", () => {
     assert.strictEqual(room.state.cars.size, 0, "cars cleared on the way back to selection");
   });
 
+  it("after a dev-mode restore, drops players with no seat and restarts the game for the rest", async () => {
+    const client = await colyseus.sdk.joinOrCreate("sandbox", { game: GAME, name: "Tester" });
+    const room = colyseus.getRoomById<GameSelectionRoomState>(client.roomId);
+    // What a restore leaves behind: a player who had dropped before the reload, with no seat
+    const ghost = room.state.players.get(client.sessionId).clone();
+    room.state.players.set("ghost", ghost);
+    room.state.carRoundTick = COUNTDOWN_TICKS + 100;
+
+    room.onRestoreRoom();
+
+    assert.ok(!room.state.players.has("ghost"), "the ghost is gone");
+    assert.ok(room.state.players.has(client.sessionId), "the connected player stays");
+    assert.deepStrictEqual([...room.state.cars.keys()], [client.sessionId], "cars only for real players");
+    assert.strictEqual(room.state.carRoundTick, 0, "a fresh round");
+    await client.leave();
+  });
+
   it("starts the sandbox room with cars, and respawns them when everyone escaped", async () => {
     const client = await colyseus.sdk.joinOrCreate("sandbox", { game: GAME, name: "Tester" });
     const room = colyseus.getRoomById<GameSelectionRoomState>(client.roomId);
     const car = room.state.cars.get(client.sessionId);
     assert.ok(car, "a car on join");
+    skipCountdown(room.state);
 
     const input = client.input();
     for (let i = 0; i < 10; i++) {

@@ -3,9 +3,11 @@ import {
   CAR_ACCEL, CAR_BRAKE, CAR_COAST_KEEP, CAR_FULL_TURN_SPEED, CAR_GRIP_KEEP, CAR_HANDBRAKE_GRIP_KEEP,
   CAR_HANDBRAKE_KEEP, CAR_LENGTH, CAR_MAX_REVERSE_SPEED, CAR_MAX_SPEED, CAR_RESTITUTION,
   CAR_AUTO_HANDBRAKE_ANGLE, CAR_HANDBRAKE_TURN_BOOST, CAR_INPUT_DEADZONE, CAR_STEER_AUTHORITY,
-  CAR_STEER_FULL_ANGLE, CAR_TURN_RATE, CAR_WIDTH,
+  CAR_STEER_FULL_ANGLE, CAR_TURN_RATE, CAR_WIDTH, DIRT_SPEED_FACTOR,
 } from "./constants.js";
+import { COUNTDOWN_TICKS, destructionFrontS, isDestroyed } from "./destruction.js";
 import { MAP_BLOCKS, SPAWN_POINTS } from "./map.js";
+import { ensureRoad, getRoad, isOnRoad, pruneRoad, ROAD_AHEAD, roadDistanceAt, type Road } from "./road.js";
 import { INPUT_BUTTONS } from "../../constants.js";
 
 const { Bodies, Body, Composite, Engine } = Matter;
@@ -97,13 +99,20 @@ export interface CarWorld {
   engine: Matter.Engine;
   /** Car bodies by player id (sessionId). */
   cars: Map<string, Matter.Body>;
+  /** The road: decides where cars are on dirt, and the destruction. Set per round. */
+  road: Road;
+  /** Where the destruction front is (`stepCarRound` sets it): road far behind it is gone. */
+  frontS: number;
 }
 
-export function createCarWorld(): CarWorld {
+/** The road a world starts with until the round sets its own. */
+export const DEFAULT_ROAD_SEED = 1;
+
+export function createCarWorld(road: Road = getRoad(DEFAULT_ROAD_SEED)): CarWorld {
   const engine = Engine.create({ gravity: { x: 0, y: 0, scale: 0 } });
   const blocks = MAP_BLOCKS.map(b => Bodies.rectangle(b.x, b.y, b.width, b.height, { isStatic: true }));
   Composite.add(engine.world, blocks);
-  return { engine, cars: new Map() };
+  return { engine, cars: new Map(), road, frontS: 0 };
 }
 
 export function destroyCarWorld(world: CarWorld): void {
@@ -150,11 +159,15 @@ const scratchControls: CarControls = { steer: 0, throttle: 0, brake: false, hand
  * scales with forward speed. Without an input (`undefined`, e.g. other players' cars between
  * server updates on the client) the car coasts straight.
  */
-export function applyCarInput(body: Matter.Body, input: CarInput | undefined): void {
+export function applyCarInput(body: Matter.Body, input: CarInput | undefined, road: Road, frontS: number): void {
   const cos = Math.cos(body.angle);
   const sin = Math.sin(body.angle);
   const vx = body.velocity.x;
   const vy = body.velocity.y;
+  // Dirt caps the top speed; a car driving onto it rolls down to the cap (see below)
+  const maxSpeed = isOnRoad(road, body.position.x, body.position.y, frontS)
+    ? CAR_MAX_SPEED
+    : CAR_MAX_SPEED * DIRT_SPEED_FACTOR;
 
   // Velocity in the car's frame: forward (+x local) and sideways (+y local)
   let forward = vx * cos + vy * sin;
@@ -173,7 +186,7 @@ export function applyCarInput(body: Matter.Body, input: CarInput | undefined): v
       // Brake to a stop (never into reverse)
       forward = forward > 0 ? Math.max(0, forward - CAR_BRAKE) : Math.min(0, forward + CAR_BRAKE);
     } else {
-      const target = controls.throttle * CAR_MAX_SPEED;
+      const target = controls.throttle * maxSpeed;
       if (forward < target) {
         // Pushed backwards (a crash): recover at braking strength
         forward = Math.min(target, forward + (forward < 0 ? CAR_BRAKE : CAR_ACCEL));
@@ -211,10 +224,50 @@ export function stepCarWorld(
 ): void {
   for (let i = 0; i < subSteps; i++) {
     for (const [id, body] of world.cars) {
-      applyCarInput(body, inputs.get(id));
+      applyCarInput(body, inputs.get(id), world.road, world.frontS);
     }
     Engine.update(world.engine, subDtMs);
   }
+}
+
+/**
+ * Advance a round by one input tick, the round having already run `roundTick` ticks. During the
+ * countdown nothing moves. After it, the world steps (`stepCarWorld`) and every car now over
+ * destroyed ground is removed from the world; their ids are returned (in `eliminated`, reused).
+ */
+export function stepCarRound(
+  world: CarWorld,
+  inputs: ReadonlyMap<string, CarInput>,
+  roundTick: number,
+  subSteps: number,
+  subDtMs: number,
+  eliminated: string[] = [],
+): string[] {
+  eliminated.length = 0;
+  if (roundTick < COUNTDOWN_TICKS) return eliminated;
+
+  world.frontS = destructionFrontS(roundTick);
+  stepCarWorld(world, inputs, subSteps, subDtMs);
+  const frontS = destructionFrontS(roundTick + 1);
+  for (const [id, body] of world.cars) {
+    if (isDestroyed(world.road, body.position.x, body.position.y, frontS)) eliminated.push(id);
+  }
+  for (const id of eliminated) removeCar(world, id);
+  return eliminated;
+}
+
+/**
+ * Keep the road generated `ROAD_AHEAD` beyond the leading car (by distance along the road) and
+ * the front, and drop data of road long gone. Doesn't change any lookup near the cars: the road is
+ * the same fixed sequence however far it's generated (see road.ts).
+ */
+export function maintainRoad(world: CarWorld, frontS: number): void {
+  let lead = frontS;
+  for (const body of world.cars.values()) {
+    lead = Math.max(lead, roadDistanceAt(world.road, body.position.x, body.position.y, frontS));
+  }
+  ensureRoad(world.road, lead + ROAD_AHEAD);
+  pruneRoad(world.road, frontS);
 }
 
 export function readCar(body: Matter.Body, out: CarSnapshot = { x: 0, y: 0, angle: 0, vx: 0, vy: 0, av: 0 }): CarSnapshot {
