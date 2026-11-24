@@ -2,7 +2,7 @@ import type { InputHandle, Room } from '@colyseus/sdk'
 import { MAX_PLAYERS_PER_ROOM, SANDBOX_CPU_PLAYERS, TICK_RATE } from '@shared/constants'
 import { destructionFrontS } from '@shared/games/car-roquelike/destruction'
 import { getRoad, roadDistanceAt, roadPointAt } from '@shared/games/car-roquelike/road'
-import type { GameInputLike } from '@shared/games/car-roquelike/physics'
+import type { GameInputLike } from '@shared/games/car-roquelike/controls'
 import { client } from '@core/network'
 
 /** The fields of the room state a CPU driver reads (from its own connection's copy). */

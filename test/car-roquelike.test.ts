@@ -7,13 +7,12 @@ import type { GameSelectionRoomState } from "../src/server/rooms/schema/MiniGame
 import { INPUT_BUTTONS } from "../src/shared/constants.js";
 import { COUNTDOWN_TICKS } from "../src/shared/games/car-roquelike/destruction.js";
 
-/** car-roquelike and its force-driven clones share the room, schema and round logic. */
-const CAR_GAMES = ["car-roquelike", "car-roquelike-mjs-torque", "car-roquelike-mjs-axle"];
+const GAME = "car-roquelike";
 
 /** Jump the round past its 5 s countdown, so cars can move right away. */
 const skipCountdown = (state: GameSelectionRoomState) => { state.carRoundTick = COUNTDOWN_TICKS; };
 
-for (const GAME of CAR_GAMES) describe(`${GAME} room`, () => {
+describe("car-roquelike room", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
 
   before(async () => colyseus = await testServer());

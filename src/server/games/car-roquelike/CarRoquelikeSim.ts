@@ -1,8 +1,8 @@
 import type { InputAPI, StepContext } from "colyseus";
 import { MAX_PLAYERS_PER_ROOM } from "../../../shared/constants.js";
+import { toCarInput, type CarInput } from "../../../shared/games/car-roquelike/controls.js";
 import {
-  addCar, createCarWorld, destroyCarWorld, maintainRoad, readCar, removeCar, stepCarRound, toCarInput,
-  type CarInput, type CarWorld,
+  addCar, createCarWorld, destroyCarWorld, maintainRoad, readCar, removeCar, stepCarRound, type CarWorld,
 } from "../../../shared/games/car-roquelike/physics.js";
 import { destructionFrontS } from "../../../shared/games/car-roquelike/destruction.js";
 import { buildRoad } from "../../../shared/games/car-roquelike/road.js";
@@ -34,7 +34,7 @@ export class CarRoquelikeSim implements ServerMiniGame {
 
     const seat = this.freeSeat();
     const body = addCar(this.world, sessionId, seat);
-    this.state.cars.set(sessionId, new Car({ ...readCar(body), slip: 0, inX: 0, inY: 0, inButtons: 0, seat }));
+    this.state.cars.set(sessionId, new Car({ ...readCar(body), inX: 0, inY: 0, inButtons: 0, seat }));
   }
 
   removePlayer(sessionId: string) {

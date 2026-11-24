@@ -11,10 +11,12 @@ import {
   buildRoad, CORNER_MAX_RADIUS, CORNER_MAX_TURN, CORNER_MIN_RADIUS, ensureRoad, isOnRoad, ownerWindowStart, pruneRoad, ROAD_AHEAD,
   ROAD_KEEP_BEHIND, START_STRAIGHT_LENGTH, STRAIGHT_MAX_LENGTH, STRAIGHT_MIN_LENGTH, type Road,
 } from "../src/shared/games/car-roquelike/road.js";
+import { resolveCarControls, type CarInput } from "../src/shared/games/car-roquelike/controls.js";
 import {
-  addCar, carSlip, createCarWorld, destroyCarWorld, readCar, resolveCarControls, stepCarRound, stepCarWorld, writeCar,
-  type CarInput, type CarWorld,
+  addCar, createCarWorld, stepCarRound, stepCarWorld, writeCar, type CarWorld,
 } from "../src/shared/games/car-roquelike/physics.js";
+
+/** The world: controls, road, destruction, rounds (the handling is in car-roquelike-handling.test.ts). */
 
 const step = (world: CarWorld, inputs: Map<string, CarInput>, ticks: number) => {
   for (let i = 0; i < ticks; i++) {
@@ -64,143 +66,6 @@ describe("car-roquelike physics", () => {
       assert.strictEqual(centered.brake, true);
       assert.strictEqual(centered.throttle, 0);
       assert.strictEqual(centered.handbrake, false);
-    });
-  });
-
-  it("is deterministic: the same inputs give the same result", () => {
-    const run = () => {
-      const world = createCarWorld();
-      addCar(world, "a", 0);
-      addCar(world, "b", 1);
-      const inputs = new Map([["a", direction(30)], ["b", direction(200, 0.7)]]);
-      step(world, inputs, 90);
-      const result = [readCar(world.cars.get("a")), readCar(world.cars.get("b"))];
-      destroyCarWorld(world);
-      return result;
-    };
-    assert.deepStrictEqual(run(), run());
-  });
-
-  it("drives straight when pointed where it faces", () => {
-    const { world, car } = openWorld();
-    step(world, new Map([["a", direction(0)]]), 30);
-    assert.ok(car.position.x > 1700, `moved along +x (x = ${car.position.x})`);
-    assert.ok(Math.abs(car.position.y - 1200) < 1, "no sideways drift");
-  });
-
-  it("turns to face the wanted direction and settles there", () => {
-    const { world, car } = openWorld();
-    // Down the screen (+y) = 90° clockwise of its heading
-    step(world, new Map([["a", direction(90)]]), 90);
-    assert.ok(Math.abs(car.angle - deg(90)) < deg(10), `faces down (angle = ${(car.angle * 180 / Math.PI).toFixed(1)}°)`);
-    assert.ok(car.position.y > 1300, "and drives that way");
-  });
-
-  it("turns around when pointed behind it", () => {
-    const { world, car } = openWorld();
-    step(world, new Map([["a", direction(180)]]), 120);
-    const heading = Math.atan2(Math.sin(car.angle), Math.cos(car.angle));
-    assert.ok(Math.abs(Math.abs(heading) - Math.PI) < deg(15), `faces -x (heading = ${(heading * 180 / Math.PI).toFixed(1)}°)`);
-  });
-
-  it("brakes to a stop (without reversing) when the stick is let go", () => {
-    const { world, car } = openWorld();
-    writeCar(car, { x: 1600, y: 1200, angle: 0, vx: CAR_MAX_SPEED, vy: 0, av: 0 });
-    step(world, new Map([["a", toward(0, 0)]]), 20);
-    assert.ok(Math.hypot(car.velocity.x, car.velocity.y) < 0.01, "stopped");
-    const stoppedAt = car.position.x;
-    step(world, new Map([["a", toward(0, 0)]]), 10);
-    assert.ok(Math.abs(car.position.x - stoppedAt) < 0.01, "stays put, no reverse");
-  });
-
-  it("slides sideways more with the handbrake held", () => {
-    const slide = (handbrake: boolean) => {
-      const { world, car } = openWorld();
-      // Moving fast along +x, but turned 90°: the old motion is now all sideways
-      writeCar(car, { x: 1600, y: 1200, angle: Math.PI / 2, vx: 10, vy: 0, av: 0 });
-      step(world, new Map([["a", toward(0, 0, handbrake)]]), 5);
-      return car.position.x - 1600;
-    };
-    assert.ok(slide(true) > slide(false) * 2, "the handbrake keeps much more sideways speed");
-  });
-
-  it("cars driving into each other collide instead of passing through", () => {
-    const world = createCarWorld();
-    const a = addCar(world, "a", 0);
-    const b = addCar(world, "b", 1);
-    writeCar(a, { x: 1300, y: 1200, angle: 0, vx: 0, vy: 0, av: 0 });
-    writeCar(b, { x: 1900, y: 1200, angle: Math.PI, vx: 0, vy: 0, av: 0 });
-
-    const inputs = new Map([["a", direction(0)], ["b", direction(180)]]);
-    let closest = Infinity;
-    for (let tick = 0; tick < 90; tick++) {
-      step(world, inputs, 1);
-      closest = Math.min(closest, Math.abs(b.position.x - a.position.x));
-    }
-    assert.ok(a.position.x < b.position.x, "they never swap sides");
-    // Head-on: centers stay about a car length apart (a little overlap is matter's contact slop)
-    assert.ok(closest > CAR_LENGTH * 0.8, `centers stayed apart (closest = ${closest.toFixed(1)})`);
-  });
-
-  describe("slip (loss of grip after a hit)", () => {
-    /**
-     * A drives north at full speed into the rear quarter of B (driving east). After `ticks`: both
-     * cars, each tick's highest slip, and B's largest turn off its heading.
-     */
-    const tBone = (ticks: number) => {
-      const world = createCarWorld();
-      const a = addCar(world, "a", 0);
-      const b = addCar(world, "b", 1);
-      writeCar(a, { x: 1600, y: 1350, angle: -Math.PI / 2, vx: 0, vy: -14, av: 0 });
-      writeCar(b, { x: 1465, y: 1200, angle: 0, vx: 14, vy: 0, av: 0 });
-      const inputs = new Map([["a", direction(-90)], ["b", direction(0)]]);
-      const slips: number[] = [];
-      let maxTurn = 0;
-      for (let tick = 0; tick < ticks; tick++) {
-        step(world, inputs, 1);
-        slips.push(Math.max(carSlip(a), carSlip(b)));
-        maxTurn = Math.max(maxTurn, Math.abs(b.angle));
-      }
-      return { world, a, b, slips, maxTurn };
-    };
-
-    it("never slips without a contact", () => {
-      const world = createCarWorld();
-      const a = addCar(world, "a", 0);
-      const b = addCar(world, "b", 5);
-      for (let tick = 0; tick < 200; tick++) {
-        step(world, new Map([["a", direction(tick * 7)], ["b", direction(-90, 0.6)]]), 1);
-        assert.strictEqual(carSlip(a), 0, `no slip at tick ${tick}`);
-        assert.strictEqual(carSlip(b), 0, `no slip at tick ${tick}`);
-      }
-    });
-
-    it("a car hit in the side is shoved off its line and turned, then grips again", () => {
-      const { world, b, slips, maxTurn } = tBone(40);
-      destroyCarWorld(world);
-      assert.ok(Math.max(...slips) > 0.5, `slipped (max ${Math.max(...slips).toFixed(2)})`);
-      assert.ok(Math.abs(b.position.y - 1200) > 20, `shoved sideways (y = ${b.position.y.toFixed(1)})`);
-      assert.ok(maxTurn > deg(10), `turned (up to ${(maxTurn * 180 / Math.PI).toFixed(1)}°)`);
-      assert.strictEqual(slips[slips.length - 1], 0, "grip is back");
-    });
-
-    it("is part of the car's snapshot, and makes it slide", () => {
-      const { world, b } = tBone(6);
-      const snapshot = readCar(b);
-      destroyCarWorld(world);
-      assert.ok(snapshot.slip > 0.3, `slipping after the hit (slip = ${snapshot.slip.toFixed(2)})`);
-
-      // The same car alone, from the snapshot with and without its slip: sideways speed after a tick
-      const sideways = (slip: number) => {
-        const { world: alone, car } = openWorld();
-        writeCar(car, { ...snapshot, slip });
-        assert.strictEqual(carSlip(car), slip);
-        step(alone, new Map([["a", direction(0)]]), 1);
-        const side = Math.abs(-car.velocity.x * Math.sin(car.angle) + car.velocity.y * Math.cos(car.angle));
-        destroyCarWorld(alone);
-        return side;
-      };
-      assert.ok(sideways(snapshot.slip) > sideways(0) * 5, "keeps much more of the shove while slipping");
     });
   });
 

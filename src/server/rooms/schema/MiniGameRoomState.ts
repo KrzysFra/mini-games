@@ -27,8 +27,6 @@ export const Car = schema({
   vy: t.float32(),
   /** Angular velocity. */
   av: t.float32(),
-  /** Loss of grip after a hit, 0..1 (part of the physics state clients adopt). */
-  slip: t.float32(),
   /**
    * The input the server last applied to this car (zeros when none). Clients predict other
    * players' cars with it until the next update.

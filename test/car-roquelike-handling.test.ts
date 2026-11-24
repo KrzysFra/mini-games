@@ -1,14 +1,14 @@
 import assert from "assert";
 
+import { CAR_LENGTH, CAR_MAX_SPEED, PHYSICS_STEP_MS, PHYSICS_SUBSTEPS } from "../src/shared/games/car-roquelike/constants.js";
+import { resolveCarControls, type CarInput } from "../src/shared/games/car-roquelike/controls.js";
+import { CAR_AXLE_GRIP_MAX } from "../src/shared/games/car-roquelike/handling.js";
 import {
-  CAR_GRIP_MAX, CAR_LENGTH, CAR_MAX_SPEED, DIRT_SPEED_FACTOR, PHYSICS_STEP_MS, PHYSICS_SUBSTEPS,
-} from "../src/shared/games/car-roquelike-mjs-torque/constants.js";
-import {
-  addCar, createCarWorld, destroyCarWorld, readCar, resolveCarControls, stepCarRound, stepCarWorld, writeCar,
-  type CarInput, type CarWorld,
-} from "../src/shared/games/car-roquelike-mjs-torque/physics.js";
+  addCar, createCarWorld, destroyCarWorld, readCar, stepCarWorld, writeCar, type CarWorld,
+} from "../src/shared/games/car-roquelike/physics.js";
 
-/** The force-driven clone's handling; road and destruction are shared with car-roquelike (tested there). */
+/** The most sideways speed change per step the tyres give (both axles together). */
+const GRIP = 2 * CAR_AXLE_GRIP_MAX;
 
 const step = (world: CarWorld, inputs: Map<string, CarInput>, ticks: number) => {
   for (let i = 0; i < ticks; i++) {
@@ -32,8 +32,9 @@ const openWorld = () => {
   return { world, car };
 };
 
-describe("car-roquelike-mjs-torque physics", () => {
-  it("steers toward the wanted direction (same controls as car-roquelike)", () => {
+/** The car handling (axle model, handling.ts); the world, road and destruction are in car-roquelike-physics.test.ts. */
+describe("car-roquelike handling", () => {
+  it("steers toward the wanted direction", () => {
     assert.ok(resolveCarControls(0, direction(40)).steer > resolveCarControls(0, direction(15)).steer);
     assert.strictEqual(resolveCarControls(0, direction(85)).handbrake, true);
     assert.strictEqual(resolveCarControls(0, toward(0, 0)).brake, true);
@@ -105,7 +106,7 @@ describe("car-roquelike-mjs-torque physics", () => {
       if (tick > 20) most = Math.max(most, Math.abs(sideways(car)));
     }
     destroyCarWorld(world);
-    assert.ok(most < CAR_GRIP_MAX, `barely slides sideways (up to ${most.toFixed(2)})`);
+    assert.ok(most < GRIP, `barely slides sideways (up to ${most.toFixed(2)})`);
   });
 
   it("cars driving into each other collide instead of passing through", () => {
@@ -140,44 +141,9 @@ describe("car-roquelike-mjs-torque physics", () => {
       maxSide = Math.max(maxSide, Math.abs(sideways(b)));
     }
     destroyCarWorld(world);
-    assert.ok(maxSide > CAR_GRIP_MAX * 2, `slid (sideways up to ${maxSide.toFixed(2)})`);
+    assert.ok(maxSide > GRIP * 2, `slid (sideways up to ${maxSide.toFixed(2)})`);
     assert.ok(Math.abs(b.position.y - 1200) > 20, `shoved sideways (y = ${b.position.y.toFixed(1)})`);
     assert.ok(maxTurn > deg(10), `turned (up to ${(maxTurn * 180 / Math.PI).toFixed(1)}°)`);
     assert.ok(Math.abs(sideways(b)) < 0.5, `grips again (sideways ${sideways(b).toFixed(2)})`);
-  });
-
-  it("freezes cars during the countdown", () => {
-    const { world, car } = openWorld();
-    stepCarRound(world, new Map([["a", direction(0)]]), 0, PHYSICS_SUBSTEPS, PHYSICS_STEP_MS);
-    assert.strictEqual(car.position.x, 1600);
-  });
-
-  describe("road and dirt", () => {
-    /** Forward speed after driving north for `ticks` from (x, y), starting at `speed`. */
-    const driveNorth = (x: number, y: number, speed: number, ticks: number) => {
-      const { world, car } = openWorld();
-      writeCar(car, { x, y, angle: -Math.PI / 2, vx: 0, vy: -speed, av: 0 });
-      step(world, new Map([["a", direction(-90)]]), ticks);
-      return -car.velocity.y;
-    };
-    const DIRT_X = 200_000;
-
-    it("keeps full top speed on the road", () => {
-      const speed = driveNorth(0, -100, CAR_MAX_SPEED, 30);
-      assert.ok(Math.abs(speed - CAR_MAX_SPEED) < 0.01, `speed = ${speed.toFixed(2)}`);
-    });
-
-    it("only reaches the reduced top speed on dirt", () => {
-      const speed = driveNorth(DIRT_X, 0, 0, 120);
-      assert.ok(Math.abs(speed - CAR_MAX_SPEED * DIRT_SPEED_FACTOR) < 0.01, `speed = ${speed.toFixed(2)}`);
-    });
-
-    it("rolls down to the dirt top speed instead of stopping dead", () => {
-      const dirtMax = CAR_MAX_SPEED * DIRT_SPEED_FACTOR;
-      const early = driveNorth(DIRT_X, 0, CAR_MAX_SPEED, 1);
-      assert.ok(early > dirtMax + 1, `still fast right after entering (${early.toFixed(2)})`);
-      const later = driveNorth(DIRT_X, 0, CAR_MAX_SPEED, 60);
-      assert.ok(Math.abs(later - dirtMax) < 0.01, `settled at the dirt cap (${later.toFixed(2)})`);
-    });
   });
 });

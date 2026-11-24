@@ -1,8 +1,10 @@
 /**
- * Tuning for car-roquelike, shared by the server simulation and the client's prediction.
+ * Tuning for car-roquelike, shared by the server simulation and the client's prediction. The
+ * tyre tuning is in handling.ts.
  *
  * Units: world pixels. Velocities are matter.js units — pixels per 1000/60 ms (`PHYSICS_STEP_MS`)
  * — which is also the physics step, so one step moves a body by exactly its velocity.
+ * Accelerations are "velocity change per physics step".
  */
 
 /** Physics sub-steps per input tick (`TICK_RATE`): 30 inputs/s × 2 = physics at 60 Hz. */
@@ -21,27 +23,26 @@ export const DIRT_SPEED_FACTOR = 0.5;
 /** A car is a rectangle that faces +x at angle 0 (length along x). */
 export const CAR_LENGTH = 40;
 export const CAR_WIDTH = 20;
+/** Car-vs-car / car-vs-wall bounce. */
+export const CAR_RESTITUTION = 0.3;
 
-/** Forward speed gained per physics step at full throttle. */
-export const CAR_ACCEL = 0.10;
-/** Deceleration per step when braking (stick centered). */
-export const CAR_BRAKE = 0.6;
-/** Top speed forwards / backwards, per step. */
+/** Top forward speed, per step (the destruction front's speed is derived from it). */
 export const CAR_MAX_SPEED = 14;
-export const CAR_MAX_REVERSE_SPEED = 5;
-/** Share of forward speed kept per step while coasting (rolling resistance). */
+/** Engine: forward speed gained per step at full throttle, while below the target speed. */
+export const CAR_ACCEL = 0.10;
+/** Brake (stick centered) deceleration per step; also how fast a car shoved backwards recovers. */
+export const CAR_BRAKE = 0.6;
+/** Share of forward speed kept per step while coasting or above the target speed (rolling drag). */
 export const CAR_COAST_KEEP = 0.985;
-
-/** Share of sideways speed kept per step: low = grippy, high = drifty (handbrake). */
-export const CAR_GRIP_KEEP = 0.1;
-export const CAR_HANDBRAKE_GRIP_KEEP = 0.9;
 /** Share of forward speed kept per step with the handbrake on. */
 export const CAR_HANDBRAKE_KEEP = 0.97;
 
-/** Angular velocity (radians per step) at full steer once at `CAR_FULL_TURN_SPEED` or faster. */
+/** Turn rate (radians per step) at full steer (see `CAR_MAX_WHEEL_ANGLE` in handling.ts). */
 export const CAR_TURN_RATE = 0.06;
-/** Below this forward speed, steering is scaled down (no turning on the spot). */
+/** Below this forward speed, the full-lock wheel angle stops growing. */
 export const CAR_FULL_TURN_SPEED = 4;
+/** Wheel-angle multiplier while the handbrake is on, so handbrake turns swing the car around. */
+export const CAR_HANDBRAKE_TURN_BOOST = 1.5;
 
 /**
  * Directional steering: the player gives the direction to drive in and the car steers toward it.
@@ -51,30 +52,5 @@ export const CAR_FULL_TURN_SPEED = 4;
 export const CAR_STEER_FULL_ANGLE = (60 * Math.PI) / 180;
 /** Beyond this angle off the wanted direction, the handbrake comes on by itself (handbrake turn). */
 export const CAR_AUTO_HANDBRAKE_ANGLE = (80 * Math.PI) / 180;
-/** Turn-rate multiplier while the handbrake is on, so handbrake turns swing the car around. */
-export const CAR_HANDBRAKE_TURN_BOOST = 1.5;
 /** Directions shorter than this count as "stick centered" (the car brakes). */
 export const CAR_INPUT_DEADZONE = 0.05;
-/**
- * How strongly steering takes over the angular velocity per step (0..1). Below 1, part of the
- * spin from a crash survives, so hits knock the car around.
- */
-export const CAR_STEER_AUTHORITY = 0.35;
-
-/** Car-vs-car / car-vs-wall bounce. */
-export const CAR_RESTITUTION = 0.3;
-
-/**
- * Loss of grip after a hit ("slip", 0..1). A physics step's velocity change from contacts (speed
- * plus spin at the car's ends) above `CAR_SLIP_IMPACT_MIN` sets slip to
- * `(impact - min) × CAR_SLIP_PER_IMPACT`; while slipping the car keeps more sideways speed (it
- * slides with the shove), steering holds the spin less (spin-outs) and it accelerates less.
- */
-export const CAR_SLIP_IMPACT_MIN = 0.5;
-export const CAR_SLIP_PER_IMPACT = 0.25;
-/** Sideways speed kept per step at full slip (normal grip keeps `CAR_GRIP_KEEP`). */
-export const CAR_SLIP_GRIP_KEEP = 0.95;
-/** Share of the steering authority lost at full slip. */
-export const CAR_SLIP_STEER_LOSS = 0.9;
-/** Slip regained per physics step: full slip back to full grip in ~0.5 s. */
-export const CAR_SLIP_RECOVERY = 1 / 30;

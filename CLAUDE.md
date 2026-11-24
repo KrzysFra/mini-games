@@ -34,20 +34,19 @@ src/client/game/scenes Lobby.ts (startup scene: connects to the `lobby` room, na
 src/client/games/      mini-game scenes: registry.ts (`MINI_GAMES` id → scene key + lazy `import()`),
                        MiniGameScene.ts (base: room handlers, back to selection/lobby),
                        placeholder/PlaceholderGame.ts (one dot per player, any key → random color),
-                       car-roquelike/CarRoquelikeGame.ts (top-down cars, predicted; see car-roquelike in Notes),
-                       car-roquelike-mjs-torque/, car-roquelike-mjs-axle/ (copies of car-roquelike's scene + CpuDrivers
-                       on each clone's physics)
+                       car-roquelike/ (see car-roquelike in Notes: CarRoquelikeGame.ts (the scene), RoadView.ts
+                       (dirt + road pieces), DestructionView.ts (void + crumbling edge), playerInput.ts
+                       (keyboard/gamepad → `GameInput`), CpuDrivers.ts)
 src/server/games/      server side of mini-games that simulate: registry.ts (`MINI_GAMES` id → `ServerMiniGame`
-                       factory), types.ts, car-roquelike/CarRoquelikeSim.ts (authoritative matter world),
-                       car-roquelike-mjs-torque/, car-roquelike-mjs-axle/ (copies of the sim on each clone's physics)
-src/shared/games/      per-game shared code: car-roquelike/ (constants, map, physics.ts on `matter-js`,
-                       destruction.ts, road.ts), car-roquelike-mjs-torque/ and
-                       car-roquelike-mjs-axle/ (constants, physics.ts only)
+                       factory), types.ts, car-roquelike/CarRoquelikeSim.ts (authoritative matter world)
+src/shared/games/      per-game shared code: car-roquelike/ (constants, controls.ts (input → `CarControls`),
+                       physics.ts (the `matter-js` world), handling.ts (axle-model tyre forces, `driveCar`),
+                       map.ts, destruction.ts, road.ts)
 src/server/rooms/MainLobbyRoom.ts   built-in LobbyRoom + player names (join option `name`, `setName` msg)
 src/server/rooms/GameSelectionRoom.ts   the game room (type `my_room`): selection → playing
 src/server/rooms/SandboxRoom.ts   dev-only `sandbox` room (extends GameSelectionRoom)
 src/shared/            code used by BOTH sides: constants, player-name sanitizing, games.ts (`MINI_GAMES`
-                       list: car-roquelike first/default, the -mjs-torque and -mjs-axle clones, then placeholders),
+                       list: car-roquelike first/default, then placeholders),
                        pure simulation logic
 public/                static assets (served at /, e.g. 'assets/block.png')
 test/                  server tests; all files share one booted server via `test/server.ts`
@@ -124,9 +123,18 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `CAR_STEER_FULL_ANGLE`), with an automatic handbrake beyond `CAR_AUTO_HANDBRAKE_ANGLE` (80°); there is
   no reverse. `INPUT_BUTTONS.ACTION` forces the handbrake. Keyboard (WASD/arrows), D-pad and `pad1`'s left
   stick (round deadzone) are summed and capped at length 1; A/Space = handbrake, Start/Back = escape.
-  Cars without an input coast. Hits: `stepCarWorld` measures each car's velocity change during the
-  matter update (= contacts) and sets `slip` (0..1, on `body.plugin`, in `CarSnapshot`/`Car`): less
-  grip, steering and acceleration for ~0.5 s, so a hit car slides and spins (`CAR_SLIP_*`). World: an endless random road (`road.ts`):
+  Cars without an input coast (wheels straight). Handling (`handling.ts`, `driveCar`, called by
+  `stepCarWorld` before each matter update with the resolved controls and the top speed there): an axle
+  ("bicycle") model driven by matter forces. `forwardSpeedChange` at the center (engine only below
+  `throttle × top speed`, drag above it, brake, handbrake bleed), plus `applyAxleGrip` at the front axle
+  (wheels turned by steer × full lock) and the rear axle (`±CAR_AXLE_OFFSET`). Each cancels
+  `CAR_TYRE_GAIN` of the axle's sideways speed (v + ω × r) via an impulse with the effective mass at that
+  point, capped at `CAR_AXLE_GRIP_MAX` (lowered while that axle slides, `CAR_SLIDE_*`; rear
+  `CAR_HANDBRAKE_REAR_GRIP_MAX` with handbrake), applied as `Body.applyForce` at the axle (matter adds
+  `F/m·dt²`), so matter turns the car from it; a hit that overpowers the grip makes the car slide and
+  spin, with no extra state. Full lock is speed-sensitive: the wheel angle that turns at
+  `CAR_TURN_RATE` (`speed × tan(angle) / wheelbase`), at most `CAR_MAX_WHEEL_ANGLE`
+  (×`CAR_HANDBRAKE_TURN_BOOST` with handbrake). World: an endless random road (`road.ts`):
   `ROAD_WIDTH` 400 wide, straights 400..2000 and corners of radius 400..2000 turning 0..120°, from
   `state.roadSeed` (new per round). It starts at the origin with a fixed 2000 straight north (the 2×4
   spawn grid is on it), then may go any direction. It is one fixed sequence per seed, generated on
@@ -160,25 +168,8 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `input: { gamepad: true }` in its settings (missing from Phaser 4's `SettingsConfig` type, so it's widened). Camera: the same for everyone, north-up, fixed zoom (`CAMERA_ZOOM`), centered on the road `CAMERA_AHEAD_OF_FRONT` (500) ahead of the predicted front (`roadPointAt`);
   the HUD is on a second camera (world and HUD in separate layers, each camera ignores the other).
   Velocities are matter units (px per 1000/60 ms), which is also the physics step.
-- **car-roquelike-mjs-torque**: an A/B clone of car-roquelike (pick either in the selection room, or via
-  `VITE_SANDBOX`) whose cars are driven by matter forces instead of having their velocity set. Its
-  scene, CpuDrivers and sim are copies of car-roquelike's importing `shared/games/car-roquelike-mjs-torque/physics.ts`
-  (same API); road, destruction, map, the `Car` schema (`slip` stays 0) and the room tests are shared.
-  Per physics step, `applyCarForces` turns per-step velocity changes into `Body.applyForce` / `body.torque`
-  (matter adds `F/m·dt²`): engine force only below `throttle × top speed`, drag above it, brake;
-  sideways grip `−side × CAR_GRIP_GAIN` capped at `CAR_GRIP_MAX` (`CAR_HANDBRAKE_GRIP_MAX` with
-  handbrake); a steering torque toward the wanted spin, capped at `CAR_STEER_MAX_ACCEL`. Sliding
-  (sideways speed between `CAR_SLIDE_START` and `CAR_SLIDE_FULL`) lowers both caps, so a hit that
-  overpowers the grip makes the car slide and spin with no slip state. No impact detection.
-- **car-roquelike-mjs-axle**: a second clone, built like -mjs-torque (copied scene/CpuDrivers/sim, shared
-  road etc., same physics API), with an axle ("bicycle") model instead of a steering torque: engine/brake/
-  drag as in -mjs-torque at the center, plus `applyAxleGrip` at the front axle (wheels turned by
-  steer × full lock) and the rear axle (`±CAR_AXLE_OFFSET`). Each cancels `CAR_TYRE_GAIN` of the axle's
-  sideways speed (v + ω × r) via an impulse with the effective mass at that point, capped at
-  `CAR_AXLE_GRIP_MAX` (lowered while that axle slides, `CAR_SLIDE_*`; rear `CAR_HANDBRAKE_REAR_GRIP_MAX`
-  with handbrake), applied as `Body.applyForce` at the axle, so matter turns the car from it. Full lock is
-  speed-sensitive: the wheel angle that turns at `CAR_TURN_RATE` (`speed × tan(angle) / wheelbase`), at
-  most `CAR_MAX_WHEEL_ANGLE`.
+  Physics tests: `car-roquelike-physics.test.ts` (controls, road, destruction, rounds) and
+  `car-roquelike-handling.test.ts` (driving, grip, collisions).
 - **Sandbox mode** (for developing a mini-game): put `VITE_SANDBOX=<MINI_GAMES id>` (or `true` for the
   default game) in `.env.local` (git-ignored) and restart `npm run dev`. Every client then skips the lobby:
   the Lobby scene `joinOrCreate`s the `sandbox` room (`filterBy(["game"])`, so all clients share one room)
