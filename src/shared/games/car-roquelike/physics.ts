@@ -5,7 +5,7 @@ import { resolveCarControls, type CarControls, type CarInput } from "./controls.
 import { COUNTDOWN_TICKS, destructionFrontS, isDestroyed } from "./destruction.js";
 import { driveCar } from "./handling.js";
 import { MAP_BLOCKS, SPAWN_POINTS } from "./map.js";
-import { ensureRoad, getRoad, isOnRoad, pruneRoad, ROAD_AHEAD, roadDistanceAt, type Road } from "./road.js";
+import { ensureRoadAround, getRoad, isOnRoad, pruneRoad, type Road } from "./road.js";
 
 const { Bodies, Body, Composite, Engine } = Matter;
 
@@ -139,16 +139,12 @@ export function stepCarRound(
 }
 
 /**
- * Keep the road generated `ROAD_AHEAD` beyond the leading car (by distance along the road) and
- * the front, and drop data of road long gone. Doesn't change any lookup near the cars: the road is
- * the same fixed sequence however far it's generated (see road.ts).
+ * Keep the road generated out to `ROAD_RADIUS` from the camera (cars further out are off the view,
+ * so eliminated), and drop data of road long gone. Doesn't change any lookup near the cars: the
+ * road is the same fixed sequence however far it's generated (see road.ts).
  */
 export function maintainRoad(world: CarWorld, frontS: number): void {
-  let lead = frontS;
-  for (const body of world.cars.values()) {
-    lead = Math.max(lead, roadDistanceAt(world.road, body.position.x, body.position.y, frontS));
-  }
-  ensureRoad(world.road, lead + ROAD_AHEAD);
+  ensureRoadAround(world.road, frontS);
   pruneRoad(world.road, frontS);
 }
 

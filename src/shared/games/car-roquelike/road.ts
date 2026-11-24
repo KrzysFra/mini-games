@@ -1,14 +1,19 @@
-import { ROAD_WIDTH } from "./constants.js";
+import { CAMERA_AHEAD_OF_FRONT, ROAD_WIDTH } from "./constants.js";
 
 /**
  * The randomly generated, endless road: a chain of straights and corners. It starts at the origin
  * heading north (the first piece is a fixed straight, where the cars spawn) and may then go any way.
  *
+ * The road in play is what's within `ROAD_RADIUS` of the camera (which sits on the road,
+ * `CAMERA_AHEAD_OF_FRONT` ahead of the destruction front; see camera.ts):
+ * - it is generated as needed (`ensureRoadAround`), until its end is `ROAD_RADIUS` from the camera;
+ * - road behind the camera that has been further than `ROAD_RADIUS` from it is deleted, along with
+ *   all road before it (`roadTail`; the ground under it is restored, see destruction.ts), and its
+ *   data is dropped a while later (`pruneRoad`). Deleted road never comes back, even if the road
+ *   turns back toward it.
+ *
  * The road is one fixed, endless sequence of pieces per seed, so the server and every client get
- * exactly the same road however far, and whenever, each of them has generated it:
- * - it is generated as needed (`ensureRoad`), at least `ROAD_AHEAD` beyond the leading car;
- * - road more than `ROAD_KEEP_BEHIND` behind the destruction front is deleted (the ground under it
- *   is restored, see destruction.ts), and its data is dropped a while later (`pruneRoad`).
+ * exactly the same road however far, and whenever, each of them has generated it.
  * Determinism: a new piece only keeps clear of the `CLEARANCE_WINDOW` of road before it (so old,
  * deleted ground can be reused), and the generator works `COMMIT_BUFFER` beyond what it hands
  * out: only that "committed" road is ever used, and backing out of a dead end never touches it.
@@ -28,10 +33,11 @@ export const CORNER_MAX_TURN = (120 * Math.PI) / 180;
 /** The first piece: a straight north from the origin, long enough for the spawn grid. */
 export const START_STRAIGHT_LENGTH = 2000;
 
-/** Road kept generated ahead of the leading car (along the road). */
-export const ROAD_AHEAD = 10000;
-/** Road further than this behind the destruction front is deleted (and the ground restored). */
-export const ROAD_KEEP_BEHIND = 4000;
+/**
+ * The road in play is within this distance (straight line) of the camera's center. The view's
+ * corners are ~2450 away (at `CAMERA_ZOOM` 0.45), so road never appears or goes on screen.
+ */
+export const ROAD_RADIUS = 5000;
 /**
  * Deleted road still owns its ground (keeps it restored rather than letting the road ahead claim
  * it) for this much further back.
@@ -48,10 +54,11 @@ const CLEARANCE = 1200;
 const CLEARANCE_SKIP = Math.PI * CLEARANCE;
 /**
  * How far back along the road a new piece keeps clear of. Older road (long deleted) may be
- * crossed: its ground has been restored. Well beyond `ROAD_AHEAD + ROAD_KEEP_BEHIND`, so a new
- * piece only reaches road still there if a car leads the front by more than ~7000.
+ * crossed: its ground has been restored. Well beyond the length of road inside the
+ * `ROAD_RADIUS` circle (2 × 5000 when straight), so new road only reaches road still in play if
+ * the road winds a lot inside the circle.
  */
-const CLEARANCE_WINDOW = 12_000;
+const CLEARANCE_WINDOW = 20_000;
 /**
  * The generator runs this far beyond the committed road; it backtracks only within it. It must be
  * deep enough to back out of the road curling itself in: at 3000 it got stuck for seconds; at
@@ -105,6 +112,11 @@ export interface Road {
   /** Centerline samples every `SAMPLE_STEP`; `samples[k]` has absolute index `sampleBase + k`. */
   samples: RoadSample[];
   sampleBase: number;
+  /**
+   * `tails[k - sampleBase]`: the absolute index of the first sample in play (the tail) with the
+   * camera at sample `k`. Computed on demand (`tailIndex`), never decreases.
+   */
+  tails: number[];
   /** Absolute index just past the last committed sample. */
   committedSamples: number;
   /** Absolute sample indices by grid cell (`cellKey`), ascending. */
@@ -274,12 +286,12 @@ function generateStep(road: Road) {
 export function buildRoad(seed: number): Road {
   const road: Road = {
     seed, pieces: [], committedPieces: 0, committedLength: 0,
-    samples: [], sampleBase: 0, committedSamples: 0, grid: new Map(), chunkCache: new Map(), prunedS: -Infinity,
+    samples: [], sampleBase: 0, tails: [], committedSamples: 0, grid: new Map(), chunkCache: new Map(), prunedS: -Infinity,
     rand: random(seed), pieceSamples: [], stuck: 0, furthest: 0,
   };
   const first: RoadPiece = { kind: "straight", x: 0, y: 0, heading: HEADING_NORTH, startS: 0, length: START_STRAIGHT_LENGTH };
   addPiece(road, first, samplePiece(first));
-  ensureRoad(road, ROAD_AHEAD + START_STRAIGHT_LENGTH);
+  ensureRoadAround(road, 0);
   return road;
 }
 
@@ -288,13 +300,58 @@ export function ensureRoad(road: Road, s: number) {
   while (road.committedLength < s) generateStep(road);
 }
 
+/** Distance along the road of the camera's center with the front at `frontS`. */
+export const cameraS = (frontS: number) => frontS + CAMERA_AHEAD_OF_FRONT;
+
+const scratchCamera: RoadSample = { x: 0, y: 0, heading: 0, s: 0 };
+const scratchEnd: RoadSample = { x: 0, y: 0, heading: 0, s: 0 };
+
+/**
+ * Generate (commit) the road until its end is `ROAD_RADIUS` from the camera with the front at
+ * `frontS` (and at least past the camera).
+ */
+export function ensureRoadAround(road: Road, frontS: number) {
+  const s = cameraS(frontS);
+  ensureRoad(road, s + SAMPLE_STEP);
+  const camera = roadPointAt(road, s, scratchCamera);
+  for (;;) {
+    const end = roadPointAt(road, road.committedLength, scratchEnd);
+    if (Math.hypot(end.x - camera.x, end.y - camera.y) > ROAD_RADIUS) return;
+    generateStep(road);
+  }
+}
+
+/**
+ * The tail (absolute index of the first sample in play) with the camera at sample `k`: just past
+ * the last sample that has been further than `ROAD_RADIUS` from the camera while it moved along
+ * the road up to `k`. A function of the road only, so every side agrees on it.
+ */
+function tailIndex(road: Road, k: number): number {
+  ensureRoad(road, (k + 1) * SAMPLE_STEP);
+  while (road.sampleBase + road.tails.length <= k) {
+    const j = road.sampleBase + road.tails.length;
+    const prev = road.tails.length > 0 ? road.tails[road.tails.length - 1] : road.sampleBase;
+    const camera = sampleAt(road, j);
+    let tail = prev;
+    for (let p = j - 1; p >= prev; p--) {
+      const sample = sampleAt(road, p);
+      if (Math.hypot(sample.x - camera.x, sample.y - camera.y) > ROAD_RADIUS) {
+        tail = p + 1;
+        break;
+      }
+    }
+    road.tails.push(tail);
+  }
+  return road.tails[Math.max(0, k - road.sampleBase)];
+}
+
 /**
  * Drop the data of road no longer needed with the front at `frontS`: deleted long enough ago
  * that it neither owns ground nor matters to new pieces. (Lookups never depend on what has been
  * pruned: everything still in play is kept, plus `PRUNE_MARGIN`.)
  */
 export function pruneRoad(road: Road, frontS: number) {
-  const keepFrom = Math.min(ownerWindowStart(frontS), road.committedLength - CLEARANCE_WINDOW) - PRUNE_MARGIN;
+  const keepFrom = Math.min(ownerWindowStart(road, frontS), road.committedLength - CLEARANCE_WINDOW) - PRUNE_MARGIN;
   // Only now and then: it's a sweep over the grid and the chunk cache
   if (keepFrom < road.prunedS + 1000) return;
   road.prunedS = keepFrom;
@@ -310,6 +367,8 @@ export function pruneRoad(road: Road, frontS: number) {
     if (cell.length === 0) road.grid.delete(key);
   }
   road.samples.splice(0, drop);
+  // The tails are computed up to the camera, well past what's dropped
+  road.tails.splice(0, drop);
   road.sampleBase += drop;
   for (const [key, owner] of road.chunkCache) {
     if (owner.index < road.sampleBase) road.chunkCache.delete(key);
@@ -346,10 +405,14 @@ export function roadPointAt(road: Road, s: number, out: RoadSample = { x: 0, y: 
   return pointOnPiece(piece, Math.max(0, Math.min(piece.length, s - piece.startS)), out);
 }
 
-/** Where the road in play starts with the front at `frontS`: anything before is deleted. */
-export const roadTail = (frontS: number) => frontS - ROAD_KEEP_BEHIND;
+/**
+ * Where (along the road) the road in play starts with the front at `frontS`: anything before is
+ * deleted. Never decreases as the front moves on (see `tailIndex`).
+ */
+export const roadTail = (road: Road, frontS: number) =>
+  tailIndex(road, Math.floor(cameraS(frontS) / SAMPLE_STEP)) * SAMPLE_STEP;
 /** Deleted road this far back still owns its ground (see `OWNER_WINDOW`). */
-export const ownerWindowStart = (frontS: number) => roadTail(frontS) - OWNER_WINDOW;
+export const ownerWindowStart = (road: Road, frontS: number) => roadTail(road, frontS) - OWNER_WINDOW;
 
 /**
  * The committed sample nearest to (x, y) with `s >= minS`, as an absolute index (-1 if none).
@@ -392,8 +455,8 @@ export function nearestSampleIndex(road: Road, x: number, y: number, minS: numbe
 
 /** Distance along the road (in play with the front at `frontS`) of the point nearest to (x, y). */
 export function roadDistanceAt(road: Road, x: number, y: number, frontS: number): number {
-  const index = nearestSampleIndex(road, x, y, roadTail(frontS));
-  return index < 0 ? roadTail(frontS) : sampleAt(road, index).s;
+  const index = nearestSampleIndex(road, x, y, roadTail(road, frontS));
+  return index < 0 ? roadTail(road, frontS) : sampleAt(road, index).s;
 }
 
 const HALF_WIDTH = ROAD_WIDTH / 2;
@@ -404,7 +467,7 @@ const scratchDist = { dist: 0 };
  * centerline, and on road still in play (deleted road is dirt again). Square ends.
  */
 export function isOnRoad(road: Road, x: number, y: number, frontS: number): boolean {
-  const tail = roadTail(frontS);
+  const tail = roadTail(road, frontS);
   const index = nearestSampleIndex(road, x, y, tail, scratchDist);
   if (index < 0 || scratchDist.dist > HALF_WIDTH) return false;
   const sample = sampleAt(road, index);
@@ -422,7 +485,7 @@ export function isOnRoad(road: Road, x: number, y: number, frontS: number): bool
  * and the window moves.
  */
 export function chunkOwnerS(road: Road, key: number, x: number, y: number, frontS: number): number {
-  const windowStart = ownerWindowStart(frontS);
+  const windowStart = ownerWindowStart(road, frontS);
   let owner = road.chunkCache.get(key);
   const valid = owner && owner.index >= road.sampleBase && sampleAt(road, owner.index).s >= windowStart
     && road.committedSamples - owner.checkedTo < 400;

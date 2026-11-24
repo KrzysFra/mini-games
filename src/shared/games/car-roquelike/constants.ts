@@ -19,6 +19,8 @@ export const PHYSICS_STEP_MS = 1000 / 60;
 export const ROAD_WIDTH = 400;
 /** Share of the top speed a car keeps on dirt. */
 export const DIRT_SPEED_FACTOR = 0.5;
+/** The camera is on the road this far (along it) ahead of the destruction front (see camera.ts). */
+export const CAMERA_AHEAD_OF_FRONT = 1000;
 
 /** A car is a rectangle that faces +x at angle 0 (length along x). */
 export const CAR_LENGTH = 40;

@@ -5,9 +5,9 @@ import { chunkOwnerS, roadTail, type Road } from "./road.js";
 /**
  * The destruction front: the world (road and dirt alike) collapses into the void, starting at the
  * road's start and moving along the road at a steady pace once the countdown is over. A car whose
- * center is over destroyed ground is eliminated. `ROAD_KEEP_BEHIND` behind the front the road is
- * deleted and the ground restored (dirt again, free for new road): the void is a band that
- * follows the front.
+ * center is over destroyed ground is eliminated. Once road is out of `ROAD_RADIUS` of the camera,
+ * behind it, it is deleted and the ground restored (dirt again, free for new road): the void is a band
+ * that follows the front.
  *
  * The front is a distance along the road (`destructionFrontS`): every point of the world has one,
  * that of its owner, the nearest point of the road's centerline (`chunkOwnerS` in road.ts), so
@@ -73,11 +73,11 @@ const chunkKey = (i: number, j: number) => (i + 50_000) * 100_000 + (j + 50_000)
 /**
  * The front distance at which chunk (i, j) breaks away with the front at `frontS` (it's void
  * while `chunkBreakS <= frontS`), or `Infinity` if its ground has been restored: its owner on the
- * road is more than `ROAD_KEEP_BEHIND` behind the front (that road is deleted).
+ * road is before the road's tail (`roadTail`: that road is deleted).
  */
 export function chunkBreakS(road: Road, i: number, j: number, frontS: number): number {
   const ownerS = chunkOwnerS(road, chunkKey(i, j), (i + 0.5) * CHUNK_SIZE, (j + 0.5) * CHUNK_SIZE, frontS);
-  if (ownerS < roadTail(frontS)) return Infinity;
+  if (ownerS < roadTail(road, frontS)) return Infinity;
   const jitter = 0.7 * edgeNoise(i, j) + 0.3 * chunkHash(i, j, 2);
   return ownerS - CHUNK_JITTER * jitter;
 }

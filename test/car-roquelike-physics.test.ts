@@ -9,8 +9,8 @@ import {
   CHUNK_JITTER, COUNTDOWN_TICKS, DESTRUCTION_SPEED, destructionFrontS, isDestroyed,
 } from "../src/shared/games/car-roquelike/destruction.js";
 import {
-  buildRoad, CORNER_MAX_RADIUS, CORNER_MAX_TURN, CORNER_MIN_RADIUS, ensureRoad, isOnRoad, ownerWindowStart, pruneRoad, ROAD_AHEAD,
-  ROAD_KEEP_BEHIND, START_STRAIGHT_LENGTH, STRAIGHT_MAX_LENGTH, STRAIGHT_MIN_LENGTH, type Road,
+  buildRoad, cameraS, CORNER_MAX_RADIUS, CORNER_MAX_TURN, CORNER_MIN_RADIUS, ensureRoad, ensureRoadAround, isOnRoad, ownerWindowStart,
+  pruneRoad, ROAD_RADIUS, roadPointAt, roadTail, START_STRAIGHT_LENGTH, STRAIGHT_MAX_LENGTH, STRAIGHT_MIN_LENGTH, type Road,
 } from "../src/shared/games/car-roquelike/road.js";
 import { resolveCarControls, type CarInput } from "../src/shared/games/car-roquelike/controls.js";
 import {
@@ -88,7 +88,7 @@ describe("car-roquelike physics", () => {
     it("is the same however it's generated: all at once, or bit by bit while old road is pruned", () => {
       const bitByBit = buildRoad(12345);
       for (let front = 0; bitByBit.committedLength < 60_000; front += 500) {
-        ensureRoad(bitByBit, front + 6000);
+        ensureRoadAround(bitByBit, front);
         pruneRoad(bitByBit, front);
       }
       const n = Math.min(bitByBit.committedPieces, road.committedPieces);
@@ -99,7 +99,7 @@ describe("car-roquelike physics", () => {
       const endless = buildRoad(99);
       let mostSamples = 0;
       for (let front = 0; front < 500_000; front += 2000) {
-        ensureRoad(endless, front + 10_000);
+        ensureRoadAround(endless, front);
         pruneRoad(endless, front);
         mostSamples = Math.max(mostSamples, endless.samples.length);
       }
@@ -113,7 +113,10 @@ describe("car-roquelike physics", () => {
         { kind: first.kind, x: first.x, y: first.y, heading: first.heading, length: first.length },
         { kind: "straight", x: 0, y: 0, heading: -Math.PI / 2, length: START_STRAIGHT_LENGTH },
       );
-      assert.ok(buildRoad(1).committedLength >= ROAD_AHEAD, "a new road is ready well past the spawns");
+      const fresh = buildRoad(1);
+      const camera = roadPointAt(fresh, cameraS(0));
+      const end = roadPointAt(fresh, fresh.committedLength);
+      assert.ok(Math.hypot(end.x - camera.x, end.y - camera.y) > ROAD_RADIUS, "a new road reaches ROAD_RADIUS from the camera");
     });
 
     it("is made of straights of 400..2000 and corners of radius 400..2000 turning up to 120°", () => {
@@ -163,13 +166,33 @@ describe("car-roquelike physics", () => {
       assert.ok(!isOnRoad(road, 0, 5, 0), "nothing before the start");
     });
 
-    it("is gone (dirt again) more than ROAD_KEEP_BEHIND behind the front", () => {
+    it("is gone (dirt again) behind the camera once out of ROAD_RADIUS", () => {
       const frontS = 20_000;
-      const tail = frontS - ROAD_KEEP_BEHIND;
+      const tail = roadTail(road, frontS);
+      // The road just before the tail was out of the circle once, so at least that far back along the road
+      assert.ok(cameraS(frontS) - tail >= ROAD_RADIUS - 25, `tail ${tail} is ROAD_RADIUS behind the camera along the road`);
       const inUse = road.samples.filter((_, k) => k % 20 === 0 && road.sampleBase + k < road.committedSamples);
       for (const sample of inUse) {
         if (sample.s < tail - 50) assert.ok(!isOnRoad(road, sample.x, sample.y, frontS), `deleted at s ${sample.s}`);
         if (sample.s > tail + 50) assert.ok(isOnRoad(road, sample.x, sample.y, frontS), `still there at s ${sample.s}`);
+      }
+    });
+
+    it("deletes road for good: the tail never moves back, and only leaves road out of ROAD_RADIUS", () => {
+      for (const seed of [1, 2, 3]) {
+        const long = buildRoad(seed);
+        let prev = 0;
+        for (let frontS = 0; frontS < 60_000; frontS += 100) {
+          ensureRoadAround(long, frontS);
+          const tail = roadTail(long, frontS);
+          assert.ok(tail >= prev, `seed ${seed}: tail went back from ${prev} to ${tail}`);
+          prev = tail;
+          const camera = roadPointAt(long, cameraS(frontS));
+          const end = roadPointAt(long, long.committedLength);
+          assert.ok(Math.hypot(end.x - camera.x, end.y - camera.y) > ROAD_RADIUS, "generated out to the radius");
+          pruneRoad(long, frontS);
+        }
+        assert.ok(prev > 40_000, `seed ${seed}: the tail followed (at ${prev})`);
       }
     });
   });
@@ -186,9 +209,9 @@ describe("car-roquelike physics", () => {
       assert.ok(DESTRUCTION_SPEED < CAR_MAX_SPEED, "outrunnable at full speed");
     });
 
-    it("is a band that follows the road: void behind the front, ground restored past ROAD_KEEP_BEHIND", () => {
+    it("is a band that follows the road: void behind the front, ground restored behind the road's tail", () => {
       const frontS = 30_000;
-      const tail = frontS - ROAD_KEEP_BEHIND;
+      const tail = roadTail(road, frontS);
       for (const sample of road.samples.filter((_, k) => k % 8 === 0)) {
         for (const offset of [0, 300, -300]) {
           const x = sample.x - Math.sin(sample.heading) * offset;
@@ -196,7 +219,7 @@ describe("car-roquelike physics", () => {
           const where = `s ${sample.s}, offset ${offset}`;
           if (sample.s > tail + 100 && sample.s < frontS - 100) assert.ok(isDestroyed(road, x, y, frontS), `void at ${where}`);
           // Deleted road owns its ground for a while (further back, the nearest road around does)
-          if (sample.s < tail - 100 && sample.s > ownerWindowStart(frontS) + 600) {
+          if (sample.s < tail - 100 && sample.s > ownerWindowStart(road, frontS) + 600) {
             assert.ok(!isDestroyed(road, x, y, frontS), `restored at ${where}`);
           }
           if (sample.s > frontS + CHUNK_JITTER + 100 && sample.s < frontS + 5000) {
@@ -210,7 +233,10 @@ describe("car-roquelike physics", () => {
       assert.ok(isDestroyed(road, 0, 500, 0), "south of the start");
       assert.ok(isDestroyed(road, -2000, 2000, 0), "far behind the start");
       for (const spawn of SPAWN_POINTS) assert.ok(!isDestroyed(road, spawn.x, spawn.y, 0), "but not the spawns");
-      assert.ok(!isDestroyed(road, 0, 500, 1500), "restored once the front is past ROAD_KEEP_BEHIND");
+      // Once the road's start is deleted (out of ROAD_RADIUS of the camera)
+      let frontS = 0;
+      while (roadTail(road, frontS) === 0) frontS += 100;
+      assert.ok(!isDestroyed(road, 0, 500, frontS), `restored once the start is deleted (front at ${frontS})`);
     });
 
     it("has a ragged edge, not a straight line", () => {

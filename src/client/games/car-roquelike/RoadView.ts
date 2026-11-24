@@ -66,7 +66,7 @@ export class RoadView {
       this.nextPiece = 0
       this.road = road
     }
-    const tail = roadTail(frontS)
+    const tail = roadTail(road, frontS)
 
     // Deleted pieces go; the one the tail is in is cut there
     let deleted = 0

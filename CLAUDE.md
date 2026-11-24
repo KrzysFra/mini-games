@@ -138,10 +138,13 @@ Target layout as games are added: `server/games/<game>/`, `client/games/<game>/`
   `ROAD_WIDTH` 400 wide, straights 400..2000 and corners of radius 400..2000 turning 0..120°, from
   `state.roadSeed` (new per round). It starts at the origin with a fixed 2000 straight north (the 2×4
   spawn grid is on it), then may go any direction. It is one fixed sequence per seed, generated on
-  demand: `maintainRoad` (server each tick, client each frame) keeps it `ROAD_AHEAD` (4000) beyond the
-  leading car and prunes old data. Road more than `ROAD_KEEP_BEHIND` (1000) behind the front is deleted
-  (dirt again; `roadTail`). Determinism however far/when each side generated: a new piece keeps 1200
-  clear only of the last `CLEARANCE_WINDOW` (12000) of road (older ground is reused), and the generator
+  demand: `maintainRoad` (server each tick, client each frame) runs `ensureRoadAround`, which commits
+  road until its end is `ROAD_RADIUS` (5000, straight-line, world units) from the camera center, and
+  prunes old data. Road behind the camera that has been out of that radius is deleted together with all
+  road before it (dirt again; `roadTail(road, frontS)`, from per-sample `Road.tails`: a pure function of
+  the road, never decreasing, so deleted road never returns). The view's corners are ~2450 from its
+  center, so none of this is on screen. Determinism however far/when each side generated: a new piece
+  keeps 1200 clear only of the last `CLEARANCE_WINDOW` (20000) of road (older ground is reused), and the generator
   runs `COMMIT_BUFFER` (15000) beyond the committed road it hands out, backtracking out of dead ends
   only within that (stuck at committed road, it forces a piece: rarely, a crossing). Only committed
   road is used. Lookups: centerline samples (absolute indices, `sampleBase` after pruning) in a spatial

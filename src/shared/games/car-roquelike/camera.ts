@@ -1,3 +1,4 @@
+import { CAMERA_AHEAD_OF_FRONT } from "./constants.js";
 import { roadPointAt, type Road, type RoadSample } from "./road.js";
 
 /**
@@ -14,8 +15,7 @@ export const SCREEN_HEIGHT = 1080;
  * road from the camera during the countdown) is on screen at the start.
  */
 export const CAMERA_ZOOM = 0.45;
-/** The camera is on the road this far ahead of the destruction front. */
-export const CAMERA_AHEAD_OF_FRONT = 1000;
+export { CAMERA_AHEAD_OF_FRONT };
 /** Half the world area the camera shows. */
 export const VIEW_HALF_WIDTH = SCREEN_WIDTH / 2 / CAMERA_ZOOM;
 export const VIEW_HALF_HEIGHT = SCREEN_HEIGHT / 2 / CAMERA_ZOOM;
